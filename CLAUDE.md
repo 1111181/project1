@@ -17,8 +17,6 @@
 | 3 | 已完成任务那里改回去 | 去掉分组末尾的"已完成 N 项"那一行，勾完就真的从列表消失 |
 | 4 | 先别写计划，我还有别的要求 | 设计里缺了功能，或用户有新想法 |
 
-**另一个待决定项**：是否删除两个对本项目无用的 skill（`design-mobile-apps`、`design-taste-frontend`）。用户说"先留着"，尚未给最终答复。
-
 ### 用户的工作方式偏好（务必遵守）
 
 - **先计划、再追问、用户同意后才动手**。不要跳过确认直接写代码。
@@ -60,13 +58,11 @@
 - 本机 git 已设置 `git config --global http.schannelCheckRevoke false`。这是 2026-10-15 为修复国内网络下 `npx skills add` 无法 clone GitHub 而设的（schannel 证书吊销检查超时）。改动是全局的，若以后 git 出现证书问题可回退此项。
 - 本机未安装 `gh` CLI，推送用原生 git。
 
-## 已安装的 skill（在 `.claude/skills/`）
+## 已安装的 skill
 
-| skill | 状态 |
-|---|---|
-| `mobile-app-ui-design` | ✅ 使用中。8 点栅格、60/30/10 配色、拇指区、44pt 触控目标 |
-| `design-mobile-apps` | ❌ 无用。实为付费服务 sleek.design 的 API 客户端，需 `SLEEK_API_KEY`。待清理 |
-| `design-taste-frontend` | ❌ 无用。skill 自身声明"不适用于 app 界面"，只做营销落地页。待清理 |
+只保留一个：`.claude/skills/mobile-app-ui-design/`（8 点栅格、60/30/10 配色、拇指区、44pt 触控目标）。设计文档 §6.4 的视觉系统就是按它写的。
+
+另外两个（`design-mobile-apps`、`design-taste-frontend`）经审查对本项目无用，已于 2026-10-15 删除。踩坑经过见 [docs/会话记录与待恢复项.md](docs/会话记录与待恢复项.md) §4——**核心教训：`npx skills add` 之后必须读 `SKILL.md`，安装量高不代表符合用途。**
 
 ## 开发流程
 

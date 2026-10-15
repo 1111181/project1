@@ -336,10 +336,10 @@ PWA / Service Worker 上一轮已确认排除。GitHub Pages 是 HTTPS，浏览�
 
 | skill | 结论 |
 |---|---|
-| `mobile-app-ui-design` | ✅ 使用。8 点栅格、60/30/10、拇指区、44pt 触控目标、空状态规范 |
-| `design-mobile-apps` | ❌ 无用。实际是付费服务 sleek.design 的 API 客户端，需 `SLEEK_API_KEY` 且免费额度仅约一次设计。建议删除 |
-| `design-taste-frontend` | ❌ 无用。skill 自身声明"不适用于 app 界面"，只做营销落地页。建议删除 |
+| `mobile-app-ui-design` | ✅ 使用中。8 点栅格、60/30/10、拇指区、44pt 触控目标、空状态规范 |
+| `design-mobile-apps` | ❌ 已于 2026-10-15 删除。实为付费服务 sleek.design 的 API 客户端，需 `SLEEK_API_KEY`，免费额度仅约一次设计 |
+| `design-taste-frontend` | ❌ 已于 2026-10-15 删除。skill 自身声明"不适用于 app 界面"，只做营销落地页 |
 
 另外本地已装 `ui-ux-pro-max` 与 `frontend-design` 两个 skill，本项目不额外依赖。
 
-删除操作可逆（`npx skills add` 随时重装），待确认后执行。
+**教训（值得记住）**：`npx skills add` 的安装量只反映流行度，不反映是否贴合当前任务。这两个 skill 分别有 819K 和 612K 安装，装上后读 `SKILL.md` 才发现都不适用。**装完必须读 SKILL.md。**
