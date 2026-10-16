@@ -22,6 +22,7 @@ import {
   renameGroup,
   deleteGroup,
   moveGroup,
+  moveTask,
 } from '../js/store.js';
 
 // ---- 测试夹具：手工构造合法 state，不依赖任何写入函数 ----
@@ -372,4 +373,114 @@ test('moveGroup 目标位置越界时收敛到边界，位置不变时原样返�
 test('moveGroup 遇到不存在的分组时原样返回', () => {
   const s = fixture();
   assert.equal(moveGroup(s, 'nope', 0), s);
+});
+
+// ---- Task 4 的测试 ----
+
+// 专为排序测试准备的夹具：
+// g1 的活跃任务是 t1, t3, t5；已完成是 t4（order 最大，排在活跃之后）
+function orderFixture() {
+  return {
+    version: SCHEMA_VERSION,
+    groups: [
+      { id: 'g1', name: '工作', order: 0 },
+      { id: 'g2', name: '生活', order: 1 },
+    ],
+    tasks: [
+      mkTask({ id: 't1', groupId: 'g1', title: 'A', order: 0 }),
+      mkTask({ id: 't3', groupId: 'g1', title: 'B', order: 1 }),
+      mkTask({ id: 't5', groupId: 'g1', title: 'C', order: 2 }),
+      mkTask({ id: 't4', groupId: 'g1', title: 'D', order: 3, done: true, completedAt: 1 }),
+      mkTask({ id: 't9', groupId: 'g2', title: 'E', order: 0 }),
+    ],
+  };
+}
+
+const activeIds = (s, g) => activeTasksInGroup(s, g).map((t) => t.id);
+const activeOrders = (s, g) => activeTasksInGroup(s, g).map((t) => t.order);
+
+test('moveTask 组内下移：把第 0 个拖到第 1 个的位置', () => {
+  const s = moveTask(orderFixture(), 't1', 'g1', 1);
+  assert.deepEqual(activeIds(s, 'g1'), ['t3', 't1', 't5']);
+  assert.deepEqual(activeOrders(s, 'g1'), [0, 1, 2], 'order 应连续无重复');
+});
+
+test('moveTask 组内上移：把最后一个拖到最前', () => {
+  const s = moveTask(orderFixture(), 't5', 'g1', 0);
+  assert.deepEqual(activeIds(s, 'g1'), ['t5', 't1', 't3']);
+  assert.deepEqual(activeOrders(s, 'g1'), [0, 1, 2]);
+});
+
+test('moveTask 拖到活跃列表末尾（toIndex = 活跃数量）', () => {
+  const s = moveTask(orderFixture(), 't1', 'g1', 3);
+  assert.deepEqual(activeIds(s, 'g1'), ['t3', 't5', 't1']);
+  assert.deepEqual(activeOrders(s, 'g1'), [0, 1, 2]);
+});
+
+test('moveTask 位置没变时结果与原状态等价', () => {
+  const s = moveTask(orderFixture(), 't1', 'g1', 0);
+  assert.deepEqual(activeIds(s, 'g1'), ['t1', 't3', 't5']);
+});
+
+test('moveTask 跨组：移入目标组的指定位置，两组 order 都压紧', () => {
+  const s = moveTask(orderFixture(), 't9', 'g1', 1);
+
+  assert.equal(getTask(s, 't9').groupId, 'g1');
+  assert.deepEqual(activeIds(s, 'g1'), ['t1', 't9', 't3', 't5']);
+  assert.deepEqual(activeOrders(s, 'g1'), [0, 1, 2, 3]);
+  assert.deepEqual(tasksInGroup(s, 'g2'), []);
+  assert.deepEqual(
+    tasksInGroup(s, 'g1').map((t) => t.order),
+    [0, 1, 2, 3, 4],
+    '完整列表（含已完成）也应是连续的',
+  );
+});
+
+test('moveTask 跨组拖到目标组末尾', () => {
+  const s = moveTask(orderFixture(), 't9', 'g1', 3);
+  assert.deepEqual(activeIds(s, 'g1'), ['t1', 't3', 't5', 't9']);
+});
+
+test('moveTask 跨组拖到一个没有活跃任务的分组，插在最前面', () => {
+  // g2 只有已完成任务时，新任务应插在活跃列表最前
+  const base = orderFixture();
+  const withDoneInG2 = {
+    ...base,
+    tasks: base.tasks.map((t) =>
+      (t.id === 't9' ? { ...t, done: true, completedAt: 1 } : t)),
+  };
+  const s = moveTask(withDoneInG2, 't1', 'g2', 0);
+
+  assert.equal(getTask(s, 't1').groupId, 'g2');
+  assert.deepEqual(activeIds(s, 'g2'), ['t1']);
+  assert.deepEqual(doneTasksInGroup(s, 'g2').map((t) => t.id), ['t9']);
+});
+
+test('moveTask 拖入空分组', () => {
+  const base = orderFixture();
+  const empty = { ...base, groups: [...base.groups, { id: 'g3', name: '空组', order: 2 }] };
+  const s = moveTask(empty, 't1', 'g3', 0);
+
+  assert.deepEqual(activeIds(s, 'g3'), ['t1']);
+  assert.equal(getTask(s, 't1').order, 0);
+  assert.deepEqual(activeIds(s, 'g1'), ['t3', 't5']);
+  assert.deepEqual(activeOrders(s, 'g1'), [0, 1]);
+});
+
+test('moveTask toIndex 越界时收敛到边界', () => {
+  const s = moveTask(orderFixture(), 't1', 'g1', 99);
+  assert.deepEqual(activeIds(s, 'g1'), ['t3', 't5', 't1']);
+});
+
+test('moveTask 不修改原 state', () => {
+  const before = orderFixture();
+  const snapshot = JSON.stringify(before.tasks);
+  moveTask(before, 't1', 'g1', 2);
+  assert.equal(JSON.stringify(before.tasks), snapshot, '原 state 的 tasks 不应被改动');
+});
+
+test('moveTask 遇到不存在的任务或目标分组时原样返回', () => {
+  const s = orderFixture();
+  assert.equal(moveTask(s, 'nope', 'g1', 0), s);
+  assert.equal(moveTask(s, 't1', 'nope', 0), s);
 });

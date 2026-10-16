@@ -253,3 +253,55 @@ export function moveGroup(state, groupId, toIndex) {
     groups: state.groups.map((g) => ({ ...g, order: orderById.get(g.id) })),
   };
 }
+
+// ---------- 排序 ----------
+
+/**
+ * 把任务移动到目标分组的指定位置。
+ *
+ * toIndex 是「目标分组未完成列表」中的可视化落点下标，范围 0..active.length。
+ * 界面看到并拖拽的是活跃列表，已完成任务收在折叠行里，
+ * 所以接口用视觉下标，界面层不需要知道已完成任务在数组里的位置。
+ */
+export function moveTask(state, taskId, toGroupId, toIndex) {
+  const task = getTask(state, taskId);
+  if (!task) return state;
+  if (!getGroup(state, toGroupId)) return state;
+
+  const fromGroupId = task.groupId;
+
+  // 目标组内除去被移动任务后的完整有序列表
+  const full = tasksInGroup(state, toGroupId).filter((t) => t.id !== taskId);
+  const active = full.filter((t) => !t.done);
+
+  let insertAt;
+  const anchor = active[toIndex];
+  if (anchor) {
+    insertAt = full.indexOf(anchor);
+  } else if (active.length > 0) {
+    insertAt = full.indexOf(active[active.length - 1]) + 1;
+  } else {
+    insertAt = 0;
+  }
+
+  const reordered = full.slice();
+  reordered.splice(insertAt, 0, { ...task, groupId: toGroupId });
+
+  const orderById = new Map(reordered.map((t, i) => [t.id, i]));
+
+  let next = {
+    ...state,
+    tasks: state.tasks.map((t) => {
+      if (t.id === taskId) {
+        return { ...t, groupId: toGroupId, order: orderById.get(t.id) };
+      }
+      if (orderById.has(t.id)) return { ...t, order: orderById.get(t.id) };
+      return t;
+    }),
+  };
+
+  // 换组时源组要压紧
+  if (fromGroupId !== toGroupId) next = renumberGroup(next, fromGroupId);
+
+  return next;
+}
