@@ -74,3 +74,113 @@ export function subtaskProgress(task) {
   const done = task.subtasks.filter((s) => s.done).length;
   return { done, total };
 }
+
+// ---------- 内部辅助 ----------
+
+/** 把某个分组的任务按现有顺序重新编号为 0..n-1，消除删除留下的空洞。 */
+function renumberGroup(state, groupId) {
+  const ordered = tasksInGroup(state, groupId);
+  const orderById = new Map(ordered.map((t, i) => [t.id, i]));
+  return {
+    ...state,
+    tasks: state.tasks.map((t) =>
+      (t.groupId === groupId ? { ...t, order: orderById.get(t.id) } : t)),
+  };
+}
+
+/** 追加任务时用的下一个 order。 */
+function nextOrderInGroup(state, groupId) {
+  const list = tasksInGroup(state, groupId);
+  return list.length === 0 ? 0 : list[list.length - 1].order + 1;
+}
+
+function replaceTask(state, taskId, updater) {
+  return {
+    ...state,
+    tasks: state.tasks.map((t) => (t.id === taskId ? updater(t) : t)),
+  };
+}
+
+// ---------- 任务 ----------
+
+/** 新建任务，追加到该分组末尾。分组不存在时原样返回。 */
+export function addTask(state, { id, groupId, title }, now = Date.now()) {
+  if (!getGroup(state, groupId)) return state;
+
+  const task = {
+    id,
+    groupId,
+    title,
+    note: '',
+    done: false,
+    important: false,
+    due: null,
+    subtasks: [],
+    createdAt: now,
+    completedAt: null,
+    order: nextOrderInGroup(state, groupId),
+  };
+
+  return { ...state, tasks: [...state.tasks, task] };
+}
+
+/**
+ * 修改任务。只有出现在 patch 里的键会被改。
+ * `done` 与 `completedAt` 保持同步：变 true 时写 now，变 false 时置 null，
+ * 值没变则不动 completedAt。
+ */
+export function updateTask(state, taskId, patch, now = Date.now()) {
+  const task = getTask(state, taskId);
+  if (!task) return state;
+
+  const next = { ...task };
+
+  if ('title' in patch) next.title = patch.title;
+  if ('note' in patch) next.note = patch.note;
+  if ('due' in patch) next.due = patch.due;
+  if ('important' in patch) next.important = Boolean(patch.important);
+
+  if ('done' in patch) {
+    const done = Boolean(patch.done);
+    if (done !== task.done) {
+      next.done = done;
+      next.completedAt = done ? now : null;
+    }
+  }
+
+  // 换组：从原位置摘掉，追加到目标组末尾，再压紧源组
+  if ('groupId' in patch && patch.groupId !== task.groupId) {
+    if (!getGroup(state, patch.groupId)) return state;
+
+    const without = { ...state, tasks: state.tasks.filter((t) => t.id !== taskId) };
+    next.groupId = patch.groupId;
+    next.order = nextOrderInGroup(without, patch.groupId);
+
+    return renumberGroup(
+      { ...without, tasks: [...without.tasks, next] },
+      task.groupId,
+    );
+  }
+
+  return replaceTask(state, taskId, () => next);
+}
+
+export function deleteTask(state, taskId) {
+  const task = getTask(state, taskId);
+  if (!task) return state;
+
+  const without = { ...state, tasks: state.tasks.filter((t) => t.id !== taskId) };
+  return renumberGroup(without, task.groupId);
+}
+
+export function toggleTaskDone(state, taskId, now = Date.now()) {
+  const task = getTask(state, taskId);
+  if (!task) return state;
+  return updateTask(state, taskId, { done: !task.done }, now);
+}
+
+export function toggleTaskImportant(state, taskId) {
+  const task = getTask(state, taskId);
+  if (!task) return state;
+  return updateTask(state, taskId, { important: !task.important });
+}
