@@ -71,7 +71,7 @@ select {
   flex: 0 0 auto;
   align-items: center;
   gap: var(--space-2);
-  min-height: 52px;
+  min-height: var(--topbar-height);
   padding: var(--space-2) var(--space-3);
   padding-top: calc(var(--space-2) + env(safe-area-inset-top));
   background: var(--color-bg);
@@ -143,21 +143,49 @@ select {
 
 /* ---------- 顶部提示条 ---------- */
 
+/* 提示条排在顶栏**下面**，而不是盖在顶栏上。
+   盖住的话会把 ⋯ 和 ← 一起吃掉——而提示条文案恰恰在让用户去点 ⋯
+   （「存储已满，去右上角 ⋯ 里导出备份」），等于把唯一的救援入口挡死。 */
 .notice {
   position: fixed;
-  top: 0;
+  top: calc(var(--topbar-height) + env(safe-area-inset-top));
   right: 0;
   left: 0;
   z-index: 60;
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
   padding: var(--space-3) var(--space-4);
-  padding-top: calc(var(--space-3) + env(safe-area-inset-top));
   font-size: var(--font-meta);
+  line-height: 1.5;
   color: var(--color-on-accent);
   background: var(--color-important);
 }
 
 .notice[hidden] {
   display: none;
+}
+
+.notice__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.notice__close {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin: -2px -4px 0 0;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--color-on-accent);
+  opacity: 0.85;
+  border-radius: var(--radius-pill);
+}
+
+.notice__close:active {
+  opacity: 1;
+  background: var(--color-overlay);
 }
 
 /* ---------- 分组 ---------- */

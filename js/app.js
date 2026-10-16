@@ -42,11 +42,37 @@ let state = loaded.state;
 let warnedAboutSave = false;
 let saveTimer = 0;
 
-/** 顶部提示条。传空字符串就收起。 */
-function showNotice(text) {
-  notice.textContent = text ?? '';
-  notice.hidden = !text;
+/**
+ * 顶部提示条。
+ *
+ * 必须能自己消失：它是一条常驻的浮层，如果不消失就会一直占着位置。
+ * 传空字符串立即收起；否则 6 秒后自动收起，也可以点 × 手动关。
+ */
+const noticeText = document.getElementById('notice-text');
+const noticeClose = document.getElementById('notice-close');
+let noticeTimer = 0;
+
+function hideNotice() {
+  if (noticeTimer) {
+    clearTimeout(noticeTimer);
+    noticeTimer = 0;
+  }
+  notice.hidden = true;
+  noticeText.textContent = '';
 }
+
+function showNotice(text) {
+  if (!text) {
+    hideNotice();
+    return;
+  }
+  noticeText.textContent = text;
+  notice.hidden = false;
+  if (noticeTimer) clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(hideNotice, 6000);
+}
+
+noticeClose.addEventListener('click', hideNotice);
 
 /** 真正写盘。 */
 function persist() {

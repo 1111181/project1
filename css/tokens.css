@@ -38,6 +38,9 @@
   /* ---------- 尺寸 ---------- */
   --tap-min: 44px;
   --fab-clearance: 88px;
+  /* 顶栏高度。提示条要靠它把自己定位到顶栏**下面**，否则会盖住
+     ⋯ 和 ← —— 而提示条文案本身就在让用户去点 ⋯。 */
+  --topbar-height: 52px;
 
   --font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
     "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;

@@ -78,6 +78,11 @@ export function attachSortable(container, options) {
   function beginDrag(item, startX, startY) {
     const rect = item.getBoundingClientRect();
 
+    // 取消拖拽时要放回**原位**，所以先把原位记下来。
+    // 不能靠占位元素的位置——拖拽途中它已经跟着指针跑到别的列表里去了。
+    const originParent = item.parentNode;
+    const originNext = item.nextSibling;
+
     const placeholder = document.createElement(item.tagName);
     placeholder.className = 'drag-placeholder';
     placeholder.style.height = `${rect.height}px`;
@@ -95,6 +100,8 @@ export function attachSortable(container, options) {
     drag = {
       item,
       placeholder,
+      originParent,
+      originNext,
       startX,
       startY,
       lastX: startX,
@@ -176,11 +183,20 @@ export function attachSortable(container, options) {
     cancelPress();
     if (!drag) return;
 
-    const { item, placeholder, target } = drag;
+    const { item, placeholder, target, originParent, originNext } = drag;
     if (drag.rafId) cancelAnimationFrame(drag.rafId);
 
-    if (placeholder.parentNode) {
-      placeholder.parentNode.insertBefore(item, placeholder);
+    if (commitDrop) {
+      // 落点就是占位元素现在的位置
+      if (placeholder.parentNode) {
+        placeholder.parentNode.insertBefore(item, placeholder);
+        placeholder.remove();
+      }
+    } else {
+      // 取消：放回原位。放回占位元素处会把这一行留在指针最后扫过的那个分组里，
+      // 而数据并没有变——界面显示在 A 组、实际还在 B 组，
+      // 之后随便一次重渲染它就会「自己跳回去」。必须还原到原位。
+      originParent.insertBefore(item, originNext);
       placeholder.remove();
     }
 
@@ -217,12 +233,20 @@ export function attachSortable(container, options) {
     if (drag) event.preventDefault();
   }
 
+  // 页面被切走时主动取消拖拽。
+  // 拖拽中途切 App / 锁屏时，浏览器不一定会补发 pointercancel；补不上的话
+  // 用户回来会看到一个悬在半空、位置固定的卡片。这里主动兜一层。
+  function handleVisibilityChange() {
+    if (drag && document.visibilityState === 'hidden') finish(false);
+  }
+
   container.addEventListener('pointerdown', handlePointerDown);
   window.addEventListener('pointermove', handlePointerMove);
   window.addEventListener('pointerup', handlePointerUp);
   window.addEventListener('pointercancel', handlePointerCancel);
   window.addEventListener('touchmove', handleTouchMove, { passive: false });
   window.addEventListener('contextmenu', handleContextMenu);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 
   return function detach() {
     container.removeEventListener('pointerdown', handlePointerDown);
@@ -231,5 +255,6 @@ export function attachSortable(container, options) {
     window.removeEventListener('pointercancel', handlePointerCancel);
     window.removeEventListener('touchmove', handleTouchMove);
     window.removeEventListener('contextmenu', handleContextMenu);
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
   };
 }
