@@ -305,3 +305,36 @@ export function moveTask(state, taskId, toGroupId, toIndex) {
 
   return next;
 }
+
+// ---------- 子任务 ----------
+// 勾选子任务不改变父任务的完成状态：父任务只由用户自己勾。
+
+export function addSubtask(state, taskId, { id, text }) {
+  if (!getTask(state, taskId)) return state;
+  return replaceTask(state, taskId, (t) => ({
+    ...t,
+    subtasks: [...t.subtasks, { id, text, done: false }],
+  }));
+}
+
+export function updateSubtask(state, taskId, subtaskId, patch) {
+  if (!getTask(state, taskId)) return state;
+  return replaceTask(state, taskId, (t) => ({
+    ...t,
+    subtasks: t.subtasks.map((s) => {
+      if (s.id !== subtaskId) return s;
+      const next = { ...s };
+      if ('text' in patch) next.text = patch.text;
+      if ('done' in patch) next.done = Boolean(patch.done);
+      return next;
+    }),
+  }));
+}
+
+export function deleteSubtask(state, taskId, subtaskId) {
+  if (!getTask(state, taskId)) return state;
+  return replaceTask(state, taskId, (t) => ({
+    ...t,
+    subtasks: t.subtasks.filter((s) => s.id !== subtaskId),
+  }));
+}

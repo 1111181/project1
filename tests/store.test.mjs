@@ -23,6 +23,9 @@ import {
   deleteGroup,
   moveGroup,
   moveTask,
+  addSubtask,
+  updateSubtask,
+  deleteSubtask,
 } from '../js/store.js';
 
 // ---- 测试夹具：手工构造合法 state，不依赖任何写入函数 ----
@@ -483,4 +486,85 @@ test('moveTask 遇到不存在的任务或目标分组时原样返回', () => {
   const s = orderFixture();
   assert.equal(moveTask(s, 'nope', 'g1', 0), s);
   assert.equal(moveTask(s, 't1', 'nope', 0), s);
+});
+
+// ---- Task 5 的测试 ----
+
+test('addSubtask 追加到末尾，默认未完成', () => {
+  let s = createInitialState();
+  const g = s.groups[0].id;
+  s = addTask(s, { id: 't_a', groupId: g, title: 'X' }, 1000);
+  s = addSubtask(s, 't_a', { id: 's1', text: '第一步' });
+  s = addSubtask(s, 't_a', { id: 's2', text: '第二步' });
+
+  const subs = getTask(s, 't_a').subtasks;
+  assert.deepEqual(subs.map((x) => x.id), ['s1', 's2']);
+  assert.deepEqual(subs.map((x) => x.text), ['第一步', '第二步']);
+  assert.deepEqual(subs.map((x) => x.done), [false, false]);
+});
+
+test('addSubtask / updateSubtask / deleteSubtask 遇到不存在的任务时原样返回', () => {
+  const s = createInitialState();
+  assert.equal(addSubtask(s, 'nope', { id: 's1', text: 'x' }), s);
+  assert.equal(updateSubtask(s, 'nope', 's1', { text: 'y' }), s);
+  assert.equal(deleteSubtask(s, 'nope', 's1'), s);
+});
+
+test('updateSubtask 只改 patch 里出现的键', () => {
+  let s = createInitialState();
+  const g = s.groups[0].id;
+  s = addTask(s, { id: 't_a', groupId: g, title: 'X' }, 1000);
+  s = addSubtask(s, 't_a', { id: 's1', text: '原文' });
+
+  s = updateSubtask(s, 't_a', 's1', { done: true });
+  assert.equal(getTask(s, 't_a').subtasks[0].text, '原文', '未传入 text 不应被改动');
+  assert.equal(getTask(s, 't_a').subtasks[0].done, true);
+});
+
+test('勾选子任务不影响父任务的完成状态', () => {
+  let s = createInitialState();
+  const g = s.groups[0].id;
+  s = addTask(s, { id: 't_a', groupId: g, title: 'X' }, 1000);
+  s = addSubtask(s, 't_a', { id: 's1', text: 'a' });
+  s = addSubtask(s, 't_a', { id: 's2', text: 'b' });
+
+  s = updateSubtask(s, 't_a', 's1', { done: true });
+  s = updateSubtask(s, 't_a', 's2', { done: true });
+
+  const t = getTask(s, 't_a');
+  assert.equal(t.done, false, '子任务全勾完也不应自动完成父任务');
+  assert.equal(t.completedAt, null);
+  assert.deepEqual(subtaskProgress(t), { done: 2, total: 2 });
+});
+
+test('deleteSubtask 只删指定子任务', () => {
+  let s = createInitialState();
+  const g = s.groups[0].id;
+  s = addTask(s, { id: 't_a', groupId: g, title: 'X' }, 1000);
+  s = addSubtask(s, 't_a', { id: 's1', text: 'a' });
+  s = addSubtask(s, 't_a', { id: 's2', text: 'b' });
+  s = addSubtask(s, 't_a', { id: 's3', text: 'c' });
+
+  s = deleteSubtask(s, 't_a', 's2');
+  assert.deepEqual(getTask(s, 't_a').subtasks.map((x) => x.id), ['s1', 's3']);
+});
+
+test('updateSubtask 遇到不存在的子任务时原样返回任务', () => {
+  let s = createInitialState();
+  const g = s.groups[0].id;
+  s = addTask(s, { id: 't_a', groupId: g, title: 'X' }, 1000);
+  s = addSubtask(s, 't_a', { id: 's1', text: 'a' });
+
+  const after = updateSubtask(s, 't_a', 'nope', { done: true });
+  assert.deepEqual(getTask(after, 't_a').subtasks.map((x) => x.id), ['s1']);
+  assert.equal(getTask(after, 't_a').subtasks[0].done, false);
+});
+
+test('删除任务时子任务随之消失', () => {
+  let s = createInitialState();
+  const g = s.groups[0].id;
+  s = addTask(s, { id: 't_a', groupId: g, title: 'X' }, 1000);
+  s = addSubtask(s, 't_a', { id: 's1', text: 'a' });
+  s = deleteTask(s, 't_a');
+  assert.deepEqual(s.tasks, []);
 });
