@@ -41,7 +41,8 @@
 - 代码推到既有仓库 `github.com/1111181/project1`
 - 开启 GitHub Pages，访问地址 `https://1111181.github.io/project1/`
 - 纯静态托管，无服务端逻辑
-- 首次加载后可离线使用（浏览器常规缓存；不做 Service Worker，见 §11）
+- 做**轻量 PWA**：加到手机主屏幕后全屏打开、无地址栏、有独立图标（详见 §11）
+- 不引入 Service Worker，离线依赖浏览器常规缓存
 - 推送是对外发布动作，执行前会单独征得确认
 
 **开发期预览**：ES modules 在 `file://` 下会被浏览器 CORS 拦截，所以本地预览必须起一个静态服务器（如 `python -m http.server 8000`），不能直接双击 `index.html`。这是选用 ES modules 的代价，换来的是代码可以分文件、可被 node 单测直接 import。
@@ -53,6 +54,7 @@
 ```
 project1/
 ├─ index.html            唯一页面：列表视图 + 详情视图两个全屏 section
+├─ manifest.webmanifest    轻量 PWA 清单（见 §11）
 ├─ css/
 │  ├─ tokens.css         设计变量（颜色 / 间距 / 圆角 / 字号 / 时长），亮暗两套
 │  └─ app.css            组件样式
@@ -64,13 +66,14 @@ project1/
 │  ├─ detail-view.js     详情页渲染与交互
 │  ├─ drag.js            拖拽排序（原生 Pointer Events）
 │  └─ app.js             入口：装配 store / router / views
+├─ icons/
+│  ├─ icon-192.png       主屏幕图标
+│  ├─ icon-512.png       主屏幕图标（高分辨率 / 启动画面）
+│  └─ apple-touch-icon.png  iOS 专用 180×180
 ├─ tests/
 │  └─ store.test.mjs     数据层单元测试（node --test）
 ├─ docs/superpowers/specs/   本文档
-└─ .claude/skills/       已安装的 skill
-    ├─ mobile-app-ui-design/
-    ├─ design-mobile-apps/         （无用，待清理，见 §12）
-    └─ design-taste-frontend/      （无用，待清理，见 §12）
+└─ .claude/skills/mobile-app-ui-design/   唯一保留的 skill
 ```
 
 **分层规则**：`store.js` 是纯函数模块，输入状态、输出新状态，不读 `localStorage`、不碰 DOM、不读时间之外的任何外部状态（`Date.now()` 通过参数注入，便于测试）。`storage.js` 是唯一碰 `localStorage` 的模块。视图层只通过 store 的 API 改数据。
@@ -308,7 +311,9 @@ project1/
 5. 备注输入到一半直接切走 App → 回来内容还在
 6. 导出 → 清空 → 导入 → 数据完全一致
 7. 亮 / 暗主题下都检查对比度和红色可辨识度
-8. 断网刷新 → 页面仍能打开
+8. 断网刷新 → 页面仍能打开（**已知不保证**，无 Service Worker。打不开不算 bug，但要如实记录实际表现）
+9. **加到主屏幕后全屏打开**：无地址栏、无底部工具栏、图标正确、刘海和底部横条不遮挡内容
+10. 全屏模式下勾选、拖拽、进详情页都正常（全屏容器尺寸变化后布局不塌）
 
 **不做的测试**：不做端到端自动化、不做视觉回归。这个规模的应用，手工清单比搭一套 E2E 更划算。
 
@@ -319,16 +324,39 @@ project1/
 | 风险 | 应对 |
 |---|---|
 | 数据只在浏览器里，清缓存即丢 | 导出/导入备份（§8）；文档里写明 |
-| 手机浏览器地址栏占位、`100vh` 不准 | 用 `100dvh` + `env(safe-area-inset-*)` 处理刘海和底部横条 |
+| 手机浏览器地址栏占位、`100vh` 不准 | 轻量 PWA 全屏打开（§11）解决地址栏；布局用 `100dvh` + `env(safe-area-inset-*)` 处理刘海和底部横条 |
+| 离线不保证（无 Service Worker） | 已接受。数据在 localStorage 不受影响；想要保证离线时补 `sw.js`（§11） |
 | iOS Safari 的 localStorage 在隐私模式下受限 | 启动时探测试写，失败则顶部显示提示条，不做静默失败 |
 | 拖拽手感在不同机型上不一致 | 只用 Pointer Events + transform，不依赖各家的私有行为；真机实测 |
 | `file://` 打开会因 ES modules 报错 | 文档写明必须用 http 服务器预览；Pages 上无此问题 |
 
 ---
 
-## 11. 明确不做 Service Worker
+## 11. 轻量 PWA
 
-PWA / Service Worker 上一轮已确认排除。GitHub Pages 是 HTTPS，浏览器常规缓存已能支撑基本离线使用。引入 Service Worker 会带来缓存版本管理的复杂度（用户看到旧版本的经典坑），收益不匹配。**如果以后想要离线更可靠或加到主屏幕，这是一个独立的后续任务。**
+**2026-10-16 修订**：原本排除了 PWA。用户复核设计时提出疑问，重新权衡后**改为做轻量版**。
+
+**改主意的理由**：第一条需求是"界面按手机屏幕设计"。而手机浏览器里地址栏加底部工具栏会吃掉可观的高度——按手机屏设计的界面，被浏览器镶两条边，体感差别比最初估的大。加到主屏幕后全屏打开就没这个问题。
+
+**做**（三样，都不涉及 Service Worker）：
+
+- `manifest.webmanifest`：`display: "standalone"`、`name` / `short_name`、`start_url`、`theme_color`、`background_color`、三个尺寸的图标
+- `icons/`：192×192、512×512，另加 iOS 专用的 180×180
+- `index.html` 补齐 meta 标签：`apple-mobile-web-app-capable`、`apple-mobile-web-app-status-bar-style`、`apple-touch-icon`、`theme-color`
+
+**不做**：
+
+- **Service Worker** —— 这是主动放弃的。没有它就完全没有缓存版本坑，以后改代码不需要处理"用户看到旧版本"的经典问题
+- 自己造安装引导横幅 —— iOS 本来就不支持，不做
+
+**代价（如实知道，别以为加了 PWA 就万事大吉）**：
+
+- **离线不保证**。断网时靠浏览器常规缓存，通常能打开，但缓存被清或长时间不访问可能白屏。**数据不受影响**——数据在 `localStorage`，不在 HTTP 缓存里，两者是分开的
+- iOS 必须手动「分享 → 添加到主屏幕」，没有自动安装提示
+- 安卓 Chrome 缺 Service Worker 就不弹安装横幅，同样要手动「添加到主屏幕」
+
+**以后想升级成完整离线**：补一个 `sw.js` 就行，manifest 和图标已经就位。这是一个独立的小任务，不影响现在的开发。
+
 
 ---
 
