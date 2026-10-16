@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>resilience probe</title>
+<style>
+  body { margin: 0; font: 12px/1.45 monospace; background: #fff; }
+  pre { margin: 0; padding: 8px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<pre id="out">跑测试中…</pre>
+<script>
+const out = document.getElementById('out');
+const lines = [];
+let fails = 0;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const check = (label, ok, detail = '') => {
+  if (!ok) fails += 1;
+  lines.push(`${ok ? '✓' : '✗'} ${label}${detail ? '\n    ' + detail : ''}`);
+  out.textContent = lines.join('\n');
+};
+const note = (text) => { lines.push(text); out.textContent = lines.join('\n'); };
+
+const frame = document.createElement('iframe');
+frame.style.cssText = 'width:390px;height:620px;border:0;display:block;background:#fff;';
+
+/** 用给定的 localStorage 内容重启应用。null 表示清空。 */
+async function boot(raw) {
+  frame.src = 'about:blank';
+  await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+  if (raw === null) localStorage.removeItem('todo.v1');
+  else localStorage.setItem('todo.v1', raw);
+  frame.src = '/';
+  await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+  await sleep(280);
+  return frame.contentDocument;
+}
+
+async function main() {
+  document.body.append(frame);
+  await boot(null);
+
+  const now = Date.now();
+  const GOOD = JSON.stringify({
+    version: 1, savedAt: now,
+    groups: [
+      { id: 'g1', name: '工作', order: 0 },
+      { id: 'g2', name: '生活', order: 1 },
+    ],
+    tasks: Array.from({ length: 30 }, (_, i) => ({
+      id: `t${i}`, groupId: i % 2 ? 'g1' : 'g2', title: `任务${i + 1}`, note: '',
+      done: false, important: false, due: null, subtasks: [],
+      createdAt: now + i, completedAt: null, order: Math.floor(i / 2),
+    })),
+  });
+
+  // ================= 损坏的存储内容 =================
+  note('===== 损坏 / 异常存储（Review Focus 第 4 条）=====');
+
+  // --- 半截 JSON ---
+  {
+    const broken = '{"version":1,"groups":[{"id":"g1"';
+    let doc = await boot(broken);
+    const win = frame.contentWindow;
+    const $ = (s) => doc.querySelector(s);
+
+    check('R1 半截 JSON：刷新后不崩，从空列表开始',
+      Boolean($('.empty-state__title')), `空状态标题="${$('.empty-state__title')?.textContent}"`);
+    check('R2 半截 JSON：顶部出现提示条',
+      !$('#notice').hidden && $('#notice').textContent.includes('无法解析'),
+      `提示条="${$('#notice').hidden ? '(隐藏)' : $('#notice').textContent}"`);
+
+    const corruptKeys = Object.keys(win.localStorage).filter((k) => k.startsWith('todo.v1.corrupt.'));
+    check('R3 半截 JSON：原始内容被备份到 todo.v1.corrupt.<时间戳>',
+      corruptKeys.length === 1, `实际有 ${corruptKeys.length} 个 corrupt 键：${corruptKeys.join(',')}`);
+    if (corruptKeys.length === 1) {
+      check('R4 备份内容与损坏原文完全一致',
+        win.localStorage.getItem(corruptKeys[0]) === broken);
+    }
+  }
+
+  // --- 重复的任务 id ---
+  {
+    const dup = JSON.stringify({
+      version: 1, savedAt: 1,
+      groups: [{ id: 'g1', name: '工作', order: 0 }],
+      tasks: [
+        { id: 'same', groupId: 'g1', title: '第一个' },
+        { id: 'same', groupId: 'g1', title: '第二个' },
+      ],
+    });
+    const doc = await boot(dup);
+    const $ = (s) => doc.querySelector(s);
+    check('R5 重复任务 id：不崩，从空列表开始',
+      Boolean($('.empty-state__title')));
+    check('R6 重复 id：提示条说明了原因并带上那个 id',
+      $('#notice').textContent.includes('重复') && $('#notice').textContent.includes('same'),
+      `提示条="${$('#notice').textContent}"`);
+  }
+
+  // --- tasks 不是数组 ---
+  {
+    const doc = await boot(JSON.stringify({ version: 1, groups: [], tasks: '不是数组' }));
+    const $ = (s) => doc.querySelector(s);
+    check('R7 tasks 不是数组：不崩且提示原因',
+      Boolean($('.empty-state__title')) && $('#notice').textContent.includes('数组'),
+      `提示条="${$('#notice').textContent}"`);
+  }
+
+  // --- 来自更新版本 ---
+  {
+    const future = JSON.stringify({
+      version: 99, savedAt: 1,
+      groups: [{ id: 'g1', name: '未来的分组', order: 0 }],
+      tasks: [{ id: 't1', groupId: 'g1', title: '未来的任务' }],
+    });
+    const win = frame.contentWindow;
+    const doc = await boot(future);
+    const $ = (s) => doc.querySelector(s);
+    check('R8 未来版本：进入只读，提示条说明原因',
+      $('#notice').textContent.includes('只读'),
+      `提示条="${$('#notice').textContent}"`);
+    check('R9 未来版本：数据仍然显示出来（不丢）',
+      $('.group__name')?.textContent === '未来的分组',
+      `实际="${$('.group__name')?.textContent}"`);
+
+    // 只读状态下不应写回原键
+    const before = win.localStorage.getItem('todo.v1');
+    $('#add-task-button').click();
+    await sleep(150);
+    const input = $('.add-row__input');
+    if (input) {
+      input.value = '只读状态下加的任务';
+      input.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      await sleep(250);
+    }
+    check('R10 只读状态下没有把数据写回原键',
+      win.localStorage.getItem('todo.v1') === before,
+      `写回了吗：${win.localStorage.getItem('todo.v1') !== before}`);
+  }
+
+  // ================= HTML 特殊字符（分组名、子任务）=================
+  note('');
+  note('===== HTML 特殊字符（Review Focus 第 1 条，补分组名与子任务）=====');
+  {
+    const doc = await boot(GOOD);
+    const win = frame.contentWindow;
+    const $ = (s) => doc.querySelector(s);
+    const $$ = (s) => [...doc.querySelectorAll(s)];
+    const press = (node, key) => node.dispatchEvent(
+      new win.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+
+    // 分组名
+    $('.group__more').click();
+    await sleep(100);
+    $$('.menu__item').find((n) => n.textContent === '重命名分组').click();
+    await sleep(150);
+    const renameInput = $('.group__rename');
+    const evilGroup = '<script>alert(1)<\/script>';
+    renameInput.value = evilGroup;
+    press(renameInput, 'Enter');
+    await sleep(200);
+    check('R11 分组名里的 HTML 字符原样显示',
+      $('.group__name')?.textContent === evilGroup,
+      `实际="${$('.group__name')?.textContent}"`);
+    check('R12 分组名没有注入 script 元素',
+      $$('script').length === 1, `script 数量=${$$('script').length}`);
+
+    // 子任务
+    $('.task[data-task-id="t0"]').click();
+    await sleep(200);
+    const add = $('.subtask-add__input');
+    for (const text of ['<script>alert(1)<\/script>', '5 > 3 & 2 < 4']) {
+      add.value = text;
+      press(add, 'Enter');
+      await sleep(180);
+    }
+    const subTexts = $$('.subtask__text').map((n) => n.value);
+    check('R13 子任务里的 HTML 字符原样显示',
+      subTexts[0] === '<script>alert(1)<\/script>', `实际="${subTexts[0]}"`);
+    check('R14 子任务里的 & 与尖括号原样显示',
+      subTexts[1] === '5 > 3 & 2 < 4', `实际="${subTexts[1]}"`);
+    check('R15 子任务没有注入 script 元素',
+      $$('script').length === 1, `script 数量=${$$('script').length}`);
+  }
+
+  // ================= 超长备注 =================
+  note('');
+  note('===== 超长文本（Review Focus 第 2 条，补 5000 字备注）=====');
+  {
+    const doc = await boot(GOOD);
+    const win = frame.contentWindow;
+    const $ = (s) => doc.querySelector(s);
+    win.location.hash = '#/task/t0';
+    await sleep(250);
+
+    const noteEl = $('#detail-note');
+    noteEl.focus();
+    noteEl.value = '备'.repeat(5000);
+    noteEl.dispatchEvent(new win.Event('input', { bubbles: true }));
+    await sleep(300);
+
+    const html = doc.documentElement;
+    check('R16 5000 字备注不产生横向滚动',
+      html.scrollWidth <= html.clientWidth,
+      `scrollWidth=${html.scrollWidth} clientWidth=${html.clientWidth}`);
+    check('R17 备注框随内容长高', noteEl.getBoundingClientRect().height > 100,
+      `高度=${noteEl.getBoundingClientRect().height.toFixed(0)}px`);
+    check('R18 5000 字备注确实存进了 localStorage',
+      (win.localStorage.getItem('todo.v1') || '').includes('备'.repeat(5000)));
+  }
+
+  // ================= 返回列表时滚动位置保留 =================
+  note('');
+  note('===== spec §9 第 4 条：返回列表时滚动位置保留 =====');
+  {
+    const doc = await boot(GOOD);
+    const win = frame.contentWindow;
+    const $ = (s) => doc.querySelector(s);
+
+    const scroller = $('#list-scroll');
+    scroller.scrollTop = 420;
+    await sleep(120);
+    const before = scroller.scrollTop;
+
+    $('#group-list .task').click();
+    await sleep(250);
+    check('R19 进入了详情视图', !$('#view-detail').hidden);
+    $('#detail-back').click();
+    await sleep(250);
+
+    const after = scroller.scrollTop;
+    check('R20 返回后列表滚动位置保留',
+      Math.abs(after - before) <= 2, `进去前 ${before}，回来后 ${after}`);
+  }
+
+  // ================= 空数据：删光所有分组 =================
+  note('');
+  note('===== 空数据（Review Focus 第 5 条，补删光所有分组）=====');
+  {
+    const doc = await boot(JSON.stringify({
+      version: 1, savedAt: 1,
+      groups: [{ id: 'g1', name: '唯一分组', order: 0 }],
+      tasks: [{ id: 't1', groupId: 'g1', title: '唯一任务' }],
+    }));
+    const win = frame.contentWindow;
+    const $ = (s) => doc.querySelector(s);
+    const $$ = (s) => [...doc.querySelectorAll(s)];
+    win.confirm = () => true;
+
+    $('.group__more').click();
+    await sleep(120);
+    $$('.menu__item').find((n) => n.textContent === '删除分组').click();
+    await sleep(250);
+
+    check('R21 删掉最后一个分组后自动补一个默认分组',
+      $('.group__name')?.textContent === '未分组', `实际="${$('.group__name')?.textContent}"`);
+    check('R22 不是空白页（分组区块与空状态都在）',
+      $$('section.group').length === 1 && Boolean($('.empty-state__title')));
+    check('R23 组内任务随分组一并删除',
+      JSON.parse(win.localStorage.getItem('todo.v1')).tasks.length === 0);
+  }
+
+  lines.push('', fails === 0 ? '全部通过' : `有 ${fails} 项不通过`);
+  out.textContent = lines.join('\n');
+}
+
+main().catch((e) => {
+  out.textContent = lines.join('\n') + '\n\n探针出错：' + e.message + '\n' + e.stack;
+});
+</script>
+</body>
+</html>

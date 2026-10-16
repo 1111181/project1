@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>backup probe</title>
+<style>
+  body { margin: 0; font: 12px/1.45 monospace; background: #fff; }
+  pre { margin: 0; padding: 8px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<pre id="out">跑测试中…</pre>
+<script>
+const out = document.getElementById('out');
+const lines = [];
+let fails = 0;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 轮询等到条件成立。异步操作（读文件、弹确认框）比固定 sleep 慢得多，不能靠猜时长。 */
+async function waitFor(predicate, timeoutMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return true;
+    await sleep(50);
+  }
+  return false;
+}
+const check = (label, ok, detail = '') => {
+  if (!ok) fails += 1;
+  lines.push(`${ok ? '✓' : '✗'} ${label}${detail ? '\n    ' + detail : ''}`);
+};
+
+const now = Date.now();
+const SEED = {
+  version: 1, savedAt: now,
+  groups: [
+    { id: 'g1', name: '工作', order: 0 },
+    { id: 'g2', name: '生活', order: 1 },
+  ],
+  tasks: [
+    { id: 't1', groupId: 'g1', title: '写周报', note: '', done: false,
+      important: false, due: null, subtasks: [], createdAt: now, completedAt: null, order: 0 },
+    { id: 't2', groupId: 'g2', title: '买牛奶', note: '', done: false,
+      important: false, due: null, subtasks: [], createdAt: now, completedAt: null, order: 0 },
+  ],
+};
+
+async function main() {
+  // 数据在 iframe 首次加载前从父页面种好（同源共享 localStorage）
+  localStorage.setItem('todo.v1', JSON.stringify(SEED));
+
+  const frame = document.createElement('iframe');
+  frame.style.cssText = 'width:390px;height:620px;border:0;display:block;background:#fff;';
+  frame.src = '/';
+  document.body.append(frame);
+  await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+  await sleep(250);
+
+  const win = frame.contentWindow;
+  const doc = frame.contentDocument;
+  const $ = (s) => doc.querySelector(s);
+  const $$ = (s) => [...doc.querySelectorAll(s)];
+  const menuItems = () => $$('.menu__item').map((n) => n.textContent);
+  const groupNames = () => $$('.group__name').map((n) => n.textContent);
+  const notice = () => ($('#notice').hidden ? '' : $('#notice').textContent);
+
+  // 可编程的对话框
+  let confirmAnswer = true;
+  let confirmMessages = [];
+  let promptAnswer = null;
+  let promptMessages = [];
+  win.confirm = (msg) => { confirmMessages.push(msg); return confirmAnswer; };
+  win.prompt = (msg) => { promptMessages.push(msg); return promptAnswer; };
+
+  // 捕获导出的 blob，并且把下载动作拦掉——
+  // 无头模式会真的去等下载，直接把整个探针挂死。
+  let exported = null;
+  const realCreate = win.URL.createObjectURL.bind(win.URL);
+  win.URL.createObjectURL = (blob) => { exported = blob; return realCreate(new win.Blob([''])); };
+
+  const realCreateElement = doc.createElement.bind(doc);
+  doc.createElement = (tag, options) => {
+    const node = realCreateElement(tag, options);
+    if (String(tag).toLowerCase() === 'a') node.click = () => {};
+    return node;
+  };
+
+  const clickMenuItem = async (label) => {
+    $('#menu-button').click();
+    await sleep(80);
+    const item = $$('.menu__item').find((n) => n.textContent === label);
+    if (!item) return false;
+    item.click();
+    await sleep(150);
+    return true;
+  };
+
+  const importFile = async (text, name = 'backup.json') => {
+    const beforeData = win.localStorage.getItem('todo.v1');
+    const beforeNotice = notice();
+    const beforeConfirms = confirmMessages.length;
+
+    const dt = new win.DataTransfer();
+    dt.items.add(new win.File([text], name, { type: 'application/json' }));
+    const input = $('#import-input');
+    input.files = dt.files;
+    input.dispatchEvent(new win.Event('change'));
+
+    // 等到有结果：数据变了、提示条变了、或弹了确认框
+    await waitFor(() => (
+      win.localStorage.getItem('todo.v1') !== beforeData
+      || notice() !== beforeNotice
+      || confirmMessages.length !== beforeConfirms
+    ));
+    await sleep(100);
+  };
+
+  const stored = () => JSON.parse(win.localStorage.getItem('todo.v1'));
+
+  // ---- B1 顶栏菜单 ----
+  $('#menu-button').click();
+  await sleep(100);
+  check('B1 顶栏 ⋯ 弹出四个菜单项',
+    menuItems().join('|') === '新建分组|导出备份|导入备份|清空全部数据',
+    `实际=${menuItems().join('|')}`);
+  check('B2 「清空全部数据」标成危险项',
+    $$('.menu__item--danger').length === 1 &&
+    $$('.menu__item--danger')[0].textContent === '清空全部数据');
+  $('#menu-button').click();   // 关掉
+  await sleep(80);
+
+  // ---- B3 新建分组：正常 ----
+  {
+    promptAnswer = '工作';
+    const before = groupNames().length;
+    await clickMenuItem('新建分组');
+    check('B3 新建分组成功', groupNames().length === before + 1,
+      `实际=${groupNames().join(',')}`);
+    check('B4 新分组在列表末尾且名字正确',
+      groupNames()[groupNames().length - 1] === '工作');
+    check('B5 数据已写盘',
+      stored().groups.some((g) => g.name === '工作'));
+  }
+
+  // ---- B6 新建分组：取消 ----
+  {
+    promptAnswer = null;
+    const before = groupNames().length;
+    await clickMenuItem('新建分组');
+    check('B6 取消新建分组时不产生变化', groupNames().length === before);
+  }
+
+  // ---- B7 新建分组：空白名字 ----
+  {
+    promptAnswer = '   ';
+    await clickMenuItem('新建分组');
+    const last = $$('.group__name')[$$('.group__name').length - 1];
+    check('B7 空白名字建出的是「未命名分组」占位而不是空行',
+      last.textContent === '未命名分组' && last.classList.contains('group__name--placeholder'),
+      `实际="${last.textContent}" class=${last.className}`);
+  }
+
+  // ---- B8 导出 ----
+  {
+    await clickMenuItem('导出备份');
+    check('B8 导出产生了备份文件', Boolean(exported));
+    let parsed = null;
+    try { parsed = JSON.parse(await exported.text()); } catch { /* 下面报错 */ }
+    check('B9 备份是合法 JSON 且含 version/savedAt/groups/tasks',
+      Boolean(parsed) && typeof parsed.version === 'number'
+      && typeof parsed.savedAt === 'number'
+      && Array.isArray(parsed.groups) && Array.isArray(parsed.tasks),
+      parsed ? `keys=${Object.keys(parsed).join(',')}` : '解析失败');
+    check('B10 导出后给出提示', notice().includes('备份已导出'), `实际="${notice()}"`);
+  }
+
+  // ---- B11 导入：合法文件 ----
+  {
+    const edited = JSON.parse(JSON.stringify(SEED));
+    edited.tasks[0].title = '改过的标题';
+    confirmMessages = [];
+    confirmAnswer = true;
+    await importFile(JSON.stringify(edited));
+
+    check('B12 导入确认框写明了分组数与任务数',
+      confirmMessages.some((m) => m.includes('2 个分组') && m.includes('2 个任务')),
+      confirmMessages.join(' || ').slice(0, 120));
+    check('B13 导入后数据被替换',
+      stored().tasks.find((t) => t.id === 't1')?.title === '改过的标题');
+    check('B14 导入后给出完成提示', notice().includes('导入完成'), `实际="${notice()}"`);
+  }
+
+  // ---- B15 导入：点取消 ----
+  {
+    const another = JSON.parse(JSON.stringify(SEED));
+    another.tasks[0].title = '不该被导入的标题';
+    confirmAnswer = false;
+    await importFile(JSON.stringify(another));
+    check('B15 导入时取消，数据完全不变',
+      stored().tasks.find((t) => t.id === 't1')?.title === '改过的标题');
+    confirmAnswer = true;
+  }
+
+  // ---- B16 导入：非 JSON ----
+  {
+    await importFile('这不是 JSON，是一张图片的内容');
+    check('B16 非 JSON 文件给出可读提示',
+      notice().includes('不是合法的 JSON'), `实际="${notice()}"`);
+    check('B17 拒绝时数据不变',
+      stored().tasks.find((t) => t.id === 't1')?.title === '改过的标题');
+  }
+
+  // ---- B18 导入：结构非法 ----
+  {
+    await importFile(JSON.stringify({ version: 1, groups: [], tasks: '不是数组' }));
+    check('B18 结构非法时提示带上原因',
+      notice().includes('导入失败') && notice().includes('数组'),
+      `实际="${notice()}"`);
+  }
+
+  // ---- B19 导入：groupId 对不上 ----
+  {
+    const orphan = {
+      version: 1, savedAt: 1,
+      groups: [{ id: 'g1', name: '工作', order: 0 }],
+      tasks: [{ id: 'a', groupId: '不存在', title: '孤儿任务' }],
+    };
+    confirmMessages = [];
+    await importFile(JSON.stringify(orphan));
+    check('B19 确认框列出自动修复项',
+      confirmMessages.some((m) => m.includes('自动修复')),
+      confirmMessages.join(' || ').slice(0, 200));
+    check('B20 导入后孤儿任务没丢',
+      stored().tasks.some((t) => t.title === '孤儿任务'),
+      `实际=${JSON.stringify(stored().tasks.map((t) => t.title))}`);
+  }
+
+  // ---- B21 清空：第一次取消 ----
+  {
+    confirmMessages = [];
+    confirmAnswer = false;
+    await clickMenuItem('清空全部数据');
+    check('B21 清空要两次确认', confirmMessages.length === 1,
+      `实际问了 ${confirmMessages.length} 次`);
+    check('B22 第一次取消后数据还在', stored().tasks.length > 0);
+  }
+
+  // ---- B23 清空：两次确认 ----
+  {
+    let calls = 0;
+    win.confirm = (msg) => { confirmMessages.push(msg); calls += 1; return calls === 2 ? true : true; };
+    await clickMenuItem('清空全部数据');
+    const after = stored();
+    check('B24 两次确认后数据被清空', after.tasks.length === 0,
+      `实际=${after.tasks.length} 个任务`);
+    check('B25 清空后只剩一个默认分组',
+      after.groups.length === 1 && after.groups[0].name === '未分组',
+      `实际=${after.groups.map((g) => g.name).join(',')}`);
+    check('B26 清空后列表不是空白页',
+      $$('.group').length === 1 && Boolean($('.empty-state__title')));
+    win.confirm = (msg) => { confirmMessages.push(msg); return confirmAnswer; };
+  }
+
+  // ---- B27 刷新后确实空了 ----
+  {
+    win.location.reload();
+    await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+    await sleep(250);
+    const doc2 = frame.contentDocument;
+    const names = [...doc2.querySelectorAll('.group__name')].map((n) => n.textContent);
+    check('B27 刷新后仍是空的（不是只清了内存）',
+      names.length === 1 && names[0] === '未分组', `实际=${names.join(',')}`);
+  }
+
+  lines.push('', fails === 0 ? '全部通过' : `有 ${fails} 项不通过`);
+  out.textContent = lines.join('\n');
+}
+
+main().catch((e) => {
+  out.textContent = lines.join('\n') + '\n\n探针出错：' + e.message + '\n' + e.stack;
+});
+</script>
+</body>
+</html>

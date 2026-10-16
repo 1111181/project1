@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>drag probe</title>
+<style>
+  body { margin: 0; font: 12px/1.45 monospace; background: #fff; }
+  pre { margin: 0; padding: 8px; white-space: pre-wrap; }
+  .bad { color: #c00; }
+</style>
+</head>
+<body>
+<pre id="out">跑测试中…</pre>
+<script>
+const out = document.getElementById('out');
+const lines = [];
+let fails = 0;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const check = (label, ok, detail = '') => {
+  if (!ok) fails += 1;
+  lines.push(`${ok ? '✓' : '✗'} ${label}${detail ? '\n    ' + detail : ''}`);
+};
+
+function seedPayload() {
+  const t = (id, g, title, order, extra = {}) => ({
+    id, groupId: g, title, note: '', done: false, important: false, due: null,
+    subtasks: [], createdAt: order + 1, completedAt: null, order, ...extra,
+  });
+  return {
+    version: 1, savedAt: 1,
+    groups: [
+      { id: 'g1', name: '工作', order: 0 },
+      { id: 'g2', name: '生活', order: 1 },
+      { id: 'g3', name: '空组', order: 2 },
+    ],
+    tasks: [
+      t('tA', 'g1', 'A', 0), t('tB', 'g1', 'B', 1), t('tC', 'g1', 'C', 2),
+      t('tD', 'g2', 'D', 0),
+    ],
+  };
+}
+
+async function main() {
+  // 数据在 iframe 首次加载前从父页面种好（同源共享 localStorage）。
+  // 不能用「先加载 iframe 再 setItem + reload」：应用在 pagehide 时会把内存里的
+  // 旧状态 flush 回去，把刚种的数据覆盖掉。
+  localStorage.setItem('todo.v1', JSON.stringify(seedPayload()));
+
+  const frame = document.createElement('iframe');
+  // 必须放在视口内：离屏 iframe 会被浏览器限制 requestAnimationFrame，
+  // 而拖拽的落点计算正是靠 rAF 调度的。放在负坐标会让拖拽看起来「完全没反应」。
+  frame.style.cssText = 'width:390px;height:620px;border:0;display:block;background:#fff;';
+  frame.src = '/';
+  document.body.append(frame);
+
+  await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+  const win = frame.contentWindow;
+  await sleep(200);
+
+  let doc = frame.contentDocument;
+  const $ = (s) => doc.querySelector(s);
+  const $$ = (s) => [...doc.querySelectorAll(s)];
+
+  // rAF 计数器：给「rAF 到底有没有在跑」留下直接证据
+  win.eval('window.__raf = 0; (function loop(){ window.__raf += 1; requestAnimationFrame(loop); })();');
+  await sleep(120);
+  const rafBefore = win.__raf;
+  await sleep(120);
+  const rafAfter = win.__raf;
+  check('0 rAF 在 iframe 里正常触发（拖拽落点依赖它）',
+    rafAfter > rafBefore, `${rafBefore} -> ${rafAfter}`);
+
+  // 无头截图模式下 rAF 不回调（上面第 0 项就是证据）。用一个契约相同的替身顶上：
+  // rAF 的约定是「在下次绘制前回调」，这里没有绘制，所以 setTimeout(0) 是等价实现。
+  // 替换的是环境缺失的浏览器能力，产品代码一行不动。
+  //
+  // 注意：location.reload() 之后是一个新的 Window，原生 rAF 会把这里的替换冲掉，
+  // 所以每次 reload 之后都必须重装一次。
+  const installRafStub = () => {
+    win.requestAnimationFrame = (cb) => win.setTimeout(() => cb(win.performance.now()), 0);
+    win.cancelAnimationFrame = (id) => win.clearTimeout(id);
+  };
+  installRafStub();
+
+  const fire = (target, type, x, y) => target.dispatchEvent(new win.PointerEvent(type, {
+    clientX: x, clientY: y, bubbles: true, cancelable: true,
+    button: 0, buttons: type === 'pointerup' ? 0 : 1,
+    pointerId: 1, pointerType: 'touch', isPrimary: true,
+  }));
+
+  /** 按下 → 等 holdMs → 移动 → 松手。steps 为中间点，用来模拟真实的手指轨迹。 */
+  async function dragFrom(x0, y0, path, holdMs) {
+    fire(doc.elementFromPoint(x0, y0), 'pointerdown', x0, y0);
+    await sleep(holdMs);
+    for (const [x, y] of path) {
+      fire(win, 'pointermove', x, y);
+      await sleep(50);
+    }
+    const [lx, ly] = path[path.length - 1];
+    fire(win, 'pointerup', lx, ly);
+    await sleep(120);
+  }
+
+  const centerOf = (node) => {
+    const r = node.getBoundingClientRect();
+    return [r.left + r.width / 2, r.top + r.height / 2];
+  };
+  const taskByTitle = (title) => $$('.task').find(
+    (n) => n.querySelector('.task__title')?.textContent === title,
+  );
+  const titlesIn = (groupId) => {
+    const list = $$(`.task-list[data-group-id="${groupId}"] > .task`);
+    return list.filter((n) => !n.classList.contains('task--done'))
+      .map((n) => n.querySelector('.task__title').textContent);
+  };
+  const groupNames = () => $$('.group__name').map((n) => n.textContent);
+
+  // ---- 1 组内下移 ----
+  {
+    const a = taskByTitle('A');
+    const b = taskByTitle('B');
+    const [ax, ay] = centerOf(a);
+    const br = b.getBoundingClientRect();
+    // 拖到 B 的下半部：落点应是 A 之后
+    await dragFrom(ax, ay, [[ax, br.bottom - 4]], 420);
+    check('1 长按拖拽后组内顺序改变',
+      titlesIn('g1').join('') === 'BAC', `实际：${titlesIn('g1').join('')}`);
+  }
+
+  // ---- 2 短按不触发 ----
+  {
+    const c = taskByTitle('C');
+    const [cx, cy] = centerOf(c);
+    const before = titlesIn('g1').join('');
+    fire(doc.elementFromPoint(cx, cy), 'pointerdown', cx, cy);
+    await sleep(120);                      // 远短于 350ms
+    check('2 短按后没有进入拖拽态', !$('.task--dragging'));
+    fire(win, 'pointerup', cx, cy);
+    await sleep(80);
+    check('3 短按不改变顺序', titlesIn('g1').join('') === before);
+  }
+
+  // ---- 4 位移超过 8px 取消长按（模拟滚动） ----
+  {
+    const c = taskByTitle('C');
+    const [cx, cy] = centerOf(c);
+    fire(doc.elementFromPoint(cx, cy), 'pointerdown', cx, cy);
+    await sleep(60);
+    fire(win, 'pointermove', cx, cy + 40);  // 先移动再等长按时间
+    await sleep(400);
+    check('4 先位移再等长按：不进入拖拽（误触防护）', !$('.task--dragging'));
+    fire(win, 'pointerup', cx, cy + 40);
+    await sleep(80);
+  }
+
+  // ---- 5 拖拽中有占位元素 ----
+  {
+    const c = taskByTitle('C');
+    const [cx, cy] = centerOf(c);
+    fire(doc.elementFromPoint(cx, cy), 'pointerdown', cx, cy);
+    await sleep(420);
+    check('5 长按后元素进入拖拽态', Boolean($('.task--dragging')));
+    check('6 原位置留下占位元素', Boolean($('.drag-placeholder')));
+    const dragging = $('.task--dragging');
+    check('7 拖拽中元素被移到 body 下（脱离原列表）',
+      dragging?.parentElement === doc.body,
+      `父元素=${dragging?.parentElement?.tagName}`);
+    fire(win, 'pointermove', cx, cy + 60);
+    await sleep(60);
+    fire(win, 'pointerup', cx, cy + 60);
+    await sleep(120);
+    check('8 松手后占位元素被清理', !$('.drag-placeholder'));
+    check('9 松手后拖拽态被清理', !$('.task--dragging'));
+    const restored = taskByTitle('C');
+    check('10 松手后元素回到列表里（不在 body 下）',
+      restored?.parentElement?.classList.contains('task-list'),
+      `父元素 class=${restored?.parentElement?.className}`);
+    check('11 松手后内联定位样式被清空',
+      !restored?.style.position && !restored?.style.width,
+      `position="${restored?.style.position}" width="${restored?.style.width}"`);
+  }
+
+  // ---- 12 跨分组 ----
+  {
+    const a = taskByTitle('A');
+    const d = taskByTitle('D');
+    const [ax, ay] = centerOf(a);
+    const [dx, dy] = centerOf(d);
+    await dragFrom(ax, ay, [[ax, ay + 20], [dx, dy]], 420);
+    check('12 跨分组：A 进了生活组',
+      titlesIn('g2').includes('A'), `生活组=${titlesIn('g2').join('')}`);
+    check('13 跨分组：工作组只剩 B C',
+      titlesIn('g1').join('') === 'BC', `工作组=${titlesIn('g1').join('')}`);
+  }
+
+  // ---- 14 拖进空分组 ----
+  {
+    const b = taskByTitle('B');
+    const [bx, by] = centerOf(b);
+    const emptySection = $$('section.group').find(
+      (s) => s.querySelector('.group__name')?.textContent === '空组',
+    );
+    const blank = emptySection.querySelector('.task-list__blank');
+    const [zx, zy] = centerOf(blank);
+    await dragFrom(bx, by, [[bx, by + 20], [zx, zy]], 420);
+    check('14 能拖进一个空分组', titlesIn('g3').includes('B'),
+      `空组=${titlesIn('g3').join('')}`);
+  }
+
+  // ---- 15 按复选框长按：不拖拽 ----
+  {
+    const c = taskByTitle('C');
+    const box = c.querySelector('.task__check');
+    const [cx, cy] = centerOf(box);
+    fire(doc.elementFromPoint(cx, cy), 'pointerdown', cx, cy);
+    await sleep(420);
+    check('15 按在复选框上长按不触发拖拽', !$('.task--dragging'));
+    fire(win, 'pointerup', cx, cy);
+    await sleep(80);
+  }
+
+  // ---- 16 按分组 ⋯ 长按：不拖拽 ----
+  {
+    const more = $('.group__more');
+    const [mx, my] = centerOf(more);
+    fire(doc.elementFromPoint(mx, my), 'pointerdown', mx, my);
+    await sleep(420);
+    check('16 按分组 ⋯ 长按不触发拖拽', !$('.task--dragging') && !$('.group--dragging'));
+    fire(win, 'pointerup', mx, my);
+    await sleep(80);
+  }
+
+  // ---- 17 按分组 ＋ 长按：不拖拽 ----
+  {
+    const add = $('.group__add');
+    const [ax2, ay2] = centerOf(add);
+    fire(doc.elementFromPoint(ax2, ay2), 'pointerdown', ax2, ay2);
+    await sleep(420);
+    check('17 按分组 ＋ 长按不触发拖拽', !$('.group--dragging') && !$('.task--dragging'));
+    fire(win, 'pointerup', ax2, ay2);
+    await sleep(80);
+  }
+
+  // ---- 18 分组重排 ----
+  {
+    const before = groupNames().join('');
+    const headers = $$('.group__header');
+    const toggle = headers[headers.length - 1].querySelector('.group__toggle');
+    const [hx, hy] = centerOf(toggle);
+    const first = $$('.group__toggle')[0];
+    const fr = first.getBoundingClientRect();
+    await dragFrom(hx, hy, [[hx, hy - 20], [hx, fr.top + 4]], 420);
+    const after = groupNames().join('');
+    check('18 拖分组标题行能改变分组顺序', after !== before, `${before} -> ${after}`);
+  }
+
+  // ---- 19 松手后没有残留拖拽状态 ----
+  check('19 全程结束没有残留占位元素', !$('.drag-placeholder'));
+  check('20 全程结束没有残留拖拽类',
+    !$('.task--dragging') && !$('.group--dragging'));
+
+  // ---- 21 刷新后顺序持久 ----
+  {
+    const before = groupNames().join('') + '|' + titlesIn('g1').join('') + '|'
+      + titlesIn('g2').join('') + '|' + titlesIn('g3').join('');
+    win.location.reload();
+    await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+    await sleep(200);
+    doc = frame.contentDocument;
+    installRafStub();   // reload 之后新窗口没有替身了
+    const after = $$('.group__name').map((n) => n.textContent).join('') + '|'
+      + titlesIn('g1').join('') + '|' + titlesIn('g2').join('') + '|'
+      + titlesIn('g3').join('');
+    check('21 刷新后分组与任务顺序都不变', after === before, `${before} -> ${after}`);
+  }
+
+  // ---- 21b pointercancel：浏览器把这次手势判成滚动了，拖拽必须干净取消 ----
+  // 计划里专门要求过这条（「收到它就当作拖拽取消，不能让界面停在一个半拖拽的状态」），
+  // 但第一版探针没有任何一项覆盖它。
+  {
+    const many = {
+      version: 1, savedAt: 1,
+      groups: [
+        { id: 'g1', name: '甲组', order: 0 },
+        { id: 'g2', name: '乙组', order: 1 },
+      ],
+      tasks: [
+        { id: 'p1', groupId: 'g1', title: 'P1', note: '', done: false, important: false,
+          due: null, subtasks: [], createdAt: 1, completedAt: null, order: 0 },
+        { id: 'p2', groupId: 'g1', title: 'P2', note: '', done: false, important: false,
+          due: null, subtasks: [], createdAt: 2, completedAt: null, order: 1 },
+        { id: 'p3', groupId: 'g2', title: 'P3', note: '', done: false, important: false,
+          due: null, subtasks: [], createdAt: 3, completedAt: null, order: 0 },
+      ],
+    };
+
+    frame.src = 'about:blank';
+    await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+    localStorage.setItem('todo.v1', JSON.stringify(many));
+    frame.src = '/';
+    await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+    await sleep(250);
+    doc = frame.contentDocument;
+    installRafStub();
+
+    const p1 = $$('.task').find((n) => n.querySelector('.task__title').textContent === 'P1');
+    const p3 = $$('.task').find((n) => n.querySelector('.task__title').textContent === 'P3');
+    const [x0, y0] = centerOf(p1);
+    const [x1, y1] = centerOf(p3);
+
+    const dataBefore = win.localStorage.getItem('todo.v1');
+
+    fire(doc.elementFromPoint(x0, y0), 'pointerdown', x0, y0);
+    await sleep(420);
+    check('21b 长按后进入拖拽态', Boolean($('.task--dragging')));
+    fire(win, 'pointermove', x0, y0 + 20);
+    await sleep(60);
+    fire(win, 'pointermove', x1, y1);          // 拖到乙组上方，占位元素会移过去
+    await sleep(80);
+
+    fire(win, 'pointercancel', x1, y1);        // 浏览器判定为滚动，取消
+    await sleep(150);
+
+    check('21c pointercancel 后没有残留拖拽态与占位元素',
+      !$('.task--dragging') && !$('.drag-placeholder'));
+    check('21d pointercancel 后数据没有被改动',
+      win.localStorage.getItem('todo.v1') === dataBefore);
+    check('21e pointercancel 后界面与数据一致：P1 仍在甲组',
+      titlesIn('g1').includes('P1'),
+      `甲组=${titlesIn('g1').join(',')}，乙组=${titlesIn('g2').join(',')}`);
+
+    // 再触发一次重渲染，确认这一行不会「自己跳回」原分组（DOM 与状态不一致的典型症状）
+    $$('.group__toggle')[0].click();
+    await sleep(120);
+    $$('.group__toggle')[0].click();
+    await sleep(120);
+    check('21f 重渲染之后 P1 位置不变（说明 DOM 没跟状态脱节）',
+      titlesIn('g1').includes('P1') && !titlesIn('g2').includes('P1'),
+      `甲组=${titlesIn('g1').join(',')}，乙组=${titlesIn('g2').join(',')}`);
+  }
+
+  // ---- 21g 拖拽中途页面被切走：必须主动取消 ----
+  // 浏览器不一定会补发 pointercancel，补不上的话用户回来会看到一个悬在半空的卡片。
+  {
+    const p2 = $$('.task').find((n) => n.querySelector('.task__title').textContent === 'P2');
+    const p3 = $$('.task').find((n) => n.querySelector('.task__title').textContent === 'P3');
+    const [x0, y0] = centerOf(p2);
+    const [x1, y1] = centerOf(p3);
+
+    fire(doc.elementFromPoint(x0, y0), 'pointerdown', x0, y0);
+    await sleep(420);
+    check('21g 长按后进入拖拽态', Boolean($('.task--dragging')));
+    fire(win, 'pointermove', x0, y0 + 20);
+    await sleep(60);
+    fire(win, 'pointermove', x1, y1);   // 拖到乙组上方
+    await sleep(80);
+
+    // 模拟切到别的 App / 锁屏
+    Object.defineProperty(doc, 'visibilityState', {
+      get: () => 'hidden', configurable: true,
+    });
+    doc.dispatchEvent(new win.Event('visibilitychange'));
+    await sleep(150);
+
+    check('21h 拖拽中途切走页面时，拖拽被主动取消（不留半拖拽状态）',
+      !$('.task--dragging') && !$('.drag-placeholder'),
+      `拖拽类=${Boolean($('.task--dragging'))} 占位元素=${Boolean($('.drag-placeholder'))}`);
+    check('21i 取消后 P2 仍在原分组',
+      titlesIn('g1').includes('P2'),
+      `甲组=${titlesIn('g1').join(',')}，乙组=${titlesIn('g2').join(',')}`);
+
+    Object.defineProperty(doc, 'visibilityState', {
+      get: () => 'visible', configurable: true,
+    });
+  }
+
+  // ---- 22 对 spec §7 那处修正的直接验证 ----
+  {
+    const taskTouch = win.getComputedStyle($('.task')).touchAction;
+    check('22 任务行的 touch-action 是 manipulation 而不是 none',
+      taskTouch === 'manipulation',
+      `实际=${taskTouch}（若为 none，手指按在任务上往下滑时列表纹丝不动）`);
+    const headerTouch = win.getComputedStyle($('.group__header')).touchAction;
+    check('23 分组标题行同样是 manipulation', headerTouch === 'manipulation',
+      `实际=${headerTouch}`);
+  }
+
+  // ---- 24/25 边缘自动滚动（任务多时必需） ----
+  {
+    const many = {
+      version: 1, savedAt: 1,
+      groups: [{ id: 'g1', name: '很多任务', order: 0 }],
+      tasks: Array.from({ length: 25 }, (_, i) => ({
+        id: `m${i}`, groupId: 'g1', title: `任务${i + 1}`, note: '', done: false,
+        important: false, due: null, subtasks: [], createdAt: i + 1,
+        completedAt: null, order: i,
+      })),
+    };
+    // 要**替换**数据，不能 setItem 后 reload：应用在 pagehide 时会把内存里的旧状态
+    // flush 回去，把刚种的数据覆盖掉。先导航到 about:blank 逼出那次 flush，
+    // 再从父页面种新数据，最后导航回来。
+    frame.src = 'about:blank';
+    await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+    localStorage.setItem('todo.v1', JSON.stringify(many));
+    frame.src = '/';
+    await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+    await sleep(250);
+    doc = frame.contentDocument;
+    installRafStub();   // 新窗口没有替身了
+
+    const scroller = doc.getElementById('list-scroll');
+    scroller.scrollTop = 500;
+    await sleep(60);
+    const bounds = scroller.getBoundingClientRect();
+
+    check('24a 滚动容器确实可滚',
+      scroller.scrollHeight > scroller.clientHeight,
+      `scrollHeight=${scroller.scrollHeight} clientHeight=${scroller.clientHeight} scrollTop=${scroller.scrollTop}`);
+
+    // 挑一个当前确实可见的任务来按
+    const visible = $$('.task').find((n) => {
+      const r = n.getBoundingClientRect();
+      return r.top > bounds.top + 20 && r.bottom < bounds.bottom - 20;
+    });
+    const vr = visible.getBoundingClientRect();
+    const x = vr.left + vr.width / 2;
+    const y = vr.top + vr.height / 2;
+
+    // 向上边缘拖
+    fire(doc.elementFromPoint(x, y), 'pointerdown', x, y);
+    await sleep(420);
+    check('24b 长按后进入拖拽态', Boolean($('.task--dragging')));
+    const beforeUp = scroller.scrollTop;
+    for (let i = 0; i < 8; i += 1) {
+      fire(win, 'pointermove', x, bounds.top + 8);
+      await sleep(60);
+    }
+    const dragEl = $('.task--dragging');
+    check('24c 拖拽元素收到了移动（transform 非空）',
+      Boolean(dragEl?.style.transform), `transform="${dragEl?.style.transform}"`);
+    const afterUp = scroller.scrollTop;
+    fire(win, 'pointerup', x, bounds.top + 8);
+    await sleep(100);
+    check('24d 拖到上边缘时列表自动向上滚', afterUp < beforeUp,
+      `scrollTop ${beforeUp} -> ${afterUp}，容器 top=${bounds.top}，指针 y=${bounds.top + 8}`);
+
+    // 向下边缘拖
+    scroller.scrollTop = 0;
+    await sleep(60);
+    const b2 = scroller.getBoundingClientRect();
+    const visible2 = $$('.task').find((n) => {
+      const r = n.getBoundingClientRect();
+      return r.top > b2.top + 20 && r.bottom < b2.bottom - 20;
+    });
+    const v2 = visible2.getBoundingClientRect();
+    const x2 = v2.left + v2.width / 2;
+    const y2 = v2.top + v2.height / 2;
+
+    fire(doc.elementFromPoint(x2, y2), 'pointerdown', x2, y2);
+    await sleep(420);
+    const beforeDown = scroller.scrollTop;
+    for (let i = 0; i < 8; i += 1) {
+      fire(win, 'pointermove', x2, b2.bottom - 8);
+      await sleep(60);
+    }
+    const afterDown = scroller.scrollTop;
+    fire(win, 'pointerup', x2, b2.bottom - 8);
+    await sleep(100);
+    check('25 拖到下边缘时列表自动向下滚', afterDown > beforeDown,
+      `scrollTop ${beforeDown} -> ${afterDown}`);
+    check('26 自动滚动之后没有残留拖拽状态',
+      !$('.drag-placeholder') && !$('.task--dragging'));
+  }
+
+  lines.push('', fails === 0 ? '全部通过' : `有 ${fails} 项不通过`);
+  out.textContent = lines.join('\n');
+  out.className = fails === 0 ? '' : 'bad';
+}
+
+main().catch((e) => {
+  out.textContent = lines.join('\n') + '\n\n探针出错：' + e.message + '\n' + e.stack;
+  out.className = 'bad';
+});
+</script>
+</body>
+</html>

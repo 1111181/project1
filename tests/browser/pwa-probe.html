@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>pwa probe</title>
+<style>
+  body { margin: 0; font: 12px/1.45 monospace; background: #fff; }
+  pre { margin: 0; padding: 8px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<pre id="out">跑测试中…</pre>
+<script>
+const out = document.getElementById('out');
+const lines = [];
+let fails = 0;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const check = (label, ok, detail = '') => {
+  if (!ok) fails += 1;
+  lines.push(`${ok ? '✓' : '✗'} ${label}${detail ? '\n    ' + detail : ''}`);
+  out.textContent = lines.join('\n');   // 实时输出，卡在哪一步一眼看得出来
+};
+const note = (text) => { lines.push(text); out.textContent = lines.join('\n'); };
+
+async function main() {
+  const frame = document.createElement('iframe');
+  frame.style.cssText = 'width:390px;height:620px;border:0;display:block;background:#fff;';
+  frame.src = '/';
+  document.body.append(frame);
+  await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+  await sleep(250);
+
+  const win = frame.contentWindow;
+  const doc = frame.contentDocument;
+  const $ = (s) => doc.querySelector(s);
+
+  // ---- manifest 与图标资源 ----
+  note('· 开始取 manifest');
+  const manifestRes = await fetch('/manifest.webmanifest');
+  note('· manifest 已拿到');
+  check('P1 manifest 返回 200', manifestRes.ok, `status=${manifestRes.status}`);
+  const manifest = await manifestRes.json();
+  check('P2 manifest 里名字正确',
+    manifest.name === '我的待办' && manifest.short_name === '待办',
+    `name=${manifest.name} short_name=${manifest.short_name}`);
+  check('P3 display 是 standalone（全屏打开的关键）',
+    manifest.display === 'standalone', `实际=${manifest.display}`);
+  check('P4 start_url 与 scope 都是相对路径',
+    manifest.start_url === './' && manifest.scope === './',
+    `start_url=${manifest.start_url} scope=${manifest.scope}`);
+  check('P5 manifest 声明了两个图标尺寸',
+    manifest.icons.map((i) => i.sizes).join('|') === '192x192|512x512',
+    `实际=${manifest.icons.map((i) => i.sizes).join('|')}`);
+
+  // 直接解析 PNG 头字节，而不是交给浏览器解码。
+  // 不用 createImageBitmap：在这套无头环境里它对 512 那张会直接挂住不返回。
+  // 「图能不能正常显示」由人工看过（icon-512.png 是蓝色圆角方块加白勾）。
+  async function readPngHeader(path) {
+    const res = await fetch(path);
+    if (!res.ok) return { ok: false, reason: `HTTP ${res.status}` };
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const signature = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    const sigOk = signature.every((b, i) => bytes[i] === b);
+    const u32 = (o) => (bytes[o] << 24) | (bytes[o + 1] << 16) | (bytes[o + 2] << 8) | bytes[o + 3];
+    return {
+      ok: sigOk,
+      width: u32(16),
+      height: u32(20),
+      bitDepth: bytes[24],
+      colorType: bytes[25],
+      size: bytes.length,
+    };
+  }
+
+  for (const icon of manifest.icons) {
+    const expected = Number(icon.sizes.split('x')[0]);
+    const head = await readPngHeader('/' + icon.src);
+    check(`P6 ${icon.src} 是合法 PNG 且尺寸为 ${icon.sizes}`,
+      head.ok && head.width === expected && head.height === expected
+      && head.bitDepth === 8 && head.colorType === 6,
+      `签名${head.ok ? '正确' : '错误'} ${head.width}×${head.height} `
+      + `位深=${head.bitDepth} 色彩类型=${head.colorType} ${head.size} 字节`);
+  }
+
+  // apple-touch-icon 也必须是真 PNG（iOS 只认 PNG）
+  {
+    const head = await readPngHeader('/icons/apple-touch-icon.png');
+    check('P7 apple-touch-icon 是 180×180 的合法 RGBA PNG',
+      head.ok && head.width === 180 && head.height === 180
+      && head.bitDepth === 8 && head.colorType === 6,
+      `${head.width}×${head.height} 位深=${head.bitDepth} 色彩类型=${head.colorType}`);
+  }
+
+  // ---- 页面里的接线 ----
+  const manifestLink = $('link[rel="manifest"]');
+  check('P8 index.html 里挂了 manifest',
+    Boolean(manifestLink) && manifestLink.getAttribute('href') === 'manifest.webmanifest',
+    `href=${manifestLink?.getAttribute('href')}`);
+  const appleLink = $('link[rel="apple-touch-icon"]');
+  check('P9 index.html 里挂了 apple-touch-icon',
+    Boolean(appleLink) && appleLink.getAttribute('href') === 'icons/apple-touch-icon.png',
+    `href=${appleLink?.getAttribute('href')}`);
+
+  // ---- iOS 全屏相关的 meta ----
+  check('P10 有 apple-mobile-web-app-capable',
+    $('meta[name="apple-mobile-web-app-capable"]')?.content === 'yes');
+  check('P11 有 apple-mobile-web-app-title',
+    $('meta[name="apple-mobile-web-app-title"]')?.content === '待办');
+  const themeColors = [...doc.querySelectorAll('meta[name="theme-color"]')];
+  check('P12 有两套 theme-color（亮/暗各一）',
+    themeColors.length === 2
+    && themeColors.some((m) => (m.getAttribute('media') || '').includes('dark')),
+    `实际=${themeColors.map((m) => m.getAttribute('media')).join(' | ')}`);
+
+  // ---- 按 spec §11 主动不做 Service Worker ----
+  const registrations = await win.navigator.serviceWorker.getRegistrations();
+  check('P13 没有注册任何 Service Worker（这是有意为之，spec §11）',
+    registrations.length === 0, `实际注册了 ${registrations.length} 个`);
+
+  // ---- 安全区与视口 ----
+  const viewport = $('meta[name="viewport"]')?.content || '';
+  check('P14 viewport 带 viewport-fit=cover（刘海屏全屏必需）',
+    viewport.includes('viewport-fit=cover'), `实际="${viewport}"`);
+
+  // ---- 页面本身没坏 ----
+  check('P15 应用正常渲染出分组', Boolean($('section.group')));
+
+  // 「图标底色是否与 tokens.css 的 --color-accent 一致」这条在浏览器里要解 PNG 像素，
+  // 而这套无头环境的解码器不可靠。改用 Node 侧的单独检查（见 ledger），这里不重复。
+
+  lines.push('', fails === 0 ? '全部通过' : `有 ${fails} 项不通过`);
+  out.textContent = lines.join('\n');
+}
+
+main().catch((e) => {
+  out.textContent = lines.join('\n') + '\n\n探针出错：' + e.message + '\n' + e.stack;
+});
+</script>
+</body>
+</html>

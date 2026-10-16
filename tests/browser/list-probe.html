@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>list view probe</title>
+<style>
+  body { margin: 0; font: 12px/1.45 monospace; background: #fff; }
+  pre { margin: 0; padding: 8px; white-space: pre-wrap; }
+  .bad { color: #c00; }
+</style>
+</head>
+<body>
+<pre id="out">跑测试中…</pre>
+<script>
+const out = document.getElementById('out');
+const lines = [];
+let fails = 0;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function check(label, ok, detail = '') {
+  if (!ok) fails += 1;
+  lines.push(`${ok ? '✓' : '✗'} ${label}${detail ? '\n    ' + detail : ''}`);
+}
+
+async function main() {
+  // 从干净状态开始：在 iframe 首次加载之前从父页面清（同源共享 localStorage）。
+  // 不能用「先加载 iframe 再清空 + reload」——应用在 pagehide 时会把内存里的旧状态
+  // flush 回去（spec §5 要求的正确行为），把清空结果覆盖掉。
+  localStorage.clear();
+
+  const frame = document.createElement('iframe');
+  // 放在视口内：离屏 iframe 会被限制 requestAnimationFrame
+  frame.style.cssText = 'width:390px;height:620px;border:0;display:block;background:#fff;';
+  frame.src = '/';
+  document.body.append(frame);
+
+  await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+  const win = frame.contentWindow;
+  let doc = frame.contentDocument;
+  await sleep(200);
+
+  doc = frame.contentDocument;
+  win.confirm = () => true; // 让删除分组的确认框自动通过
+  win.alert = () => { throw new Error('不应该出现 alert'); };
+
+  const $ = (sel) => doc.querySelector(sel);
+  const $$ = (sel) => [...doc.querySelectorAll(sel)];
+  const groupIds = () => $$('section.group').map((n) => n.dataset.groupId);
+  const activeTitles = () => $$('.task:not(.task--done) .task__title').map((n) => n.textContent);
+
+  const press = (node, key) => node.dispatchEvent(
+    new win.KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+  );
+
+  // ---- A 初始状态 ----
+  check('A1 空状态文案出现', $('.empty-state__title')?.textContent === '还没有任务');
+  check('A2 空状态引导文案出现', $('.empty-state__hint')?.textContent === '点下面的按钮加一个');
+  check('A3 有一个分组「未分组」', $$('.group__name').map((n) => n.textContent).join('|') === '未分组');
+  check('A4 空分组有占位提示', $('.task-list__blank')?.textContent === '这个分组还没有任务');
+
+  // ---- B/C/D/E 内联添加 ----
+  $('#add-task-button').click();
+  await sleep(80);
+  let addInput = $('.add-row__input');
+  check('B1 点悬浮按钮后出现输入行', Boolean(addInput));
+  check('B2 输入行自动聚焦', doc.activeElement === addInput);
+
+  addInput.value = '买牛奶';
+  press(addInput, 'Enter');
+  await sleep(80);
+  check('C1 回车后任务出现', activeTitles().includes('买牛奶'), `实际：${activeTitles().join(', ')}`);
+
+  addInput = $('.add-row__input');
+  check('C2 输入行仍在且已清空', Boolean(addInput) && addInput.value === '');
+  check('C3 焦点仍在输入行（可连续录入）', doc.activeElement === addInput);
+
+  addInput.value = '交房租';
+  press(addInput, 'Enter');
+  await sleep(80);
+  check('D1 连续录入第二条成功', activeTitles().join('|') === '买牛奶|交房租',
+    `实际：${activeTitles().join('|')}`);
+
+  addInput = $('.add-row__input');
+  press(addInput, 'Escape');
+  await sleep(80);
+  check('E1 按 Esc 后输入行关闭', !$('.add-row__input'));
+
+  // ---- F 分组 + 按钮 ----
+  $('.group__add').click();
+  await sleep(80);
+  const addRow = $('.add-row');
+  const groupSection = addRow?.closest('section.group');
+  check('F1 分组 + 在该组内开输入行',
+    Boolean(addRow) && groupSection?.dataset.groupId === groupIds()[0]);
+  press($('.add-row__input'), 'Escape');
+  await sleep(80);
+
+  // ---- H/I/J 完成与已完成折叠 ----
+  $('.task .task__check').click();
+  await sleep(80);
+  check('H1 勾选后从活跃列表消失', activeTitles().join('|') === '交房租',
+    `实际：${activeTitles().join('|')}`);
+  check('H2 出现「已完成 1 项」', $('.done-section__toggle')?.textContent === '已完成 1 项');
+  check('H3 已完成区默认收起', !$('.done-section .task'));
+
+  $('.done-section__toggle').click();
+  await sleep(80);
+  const doneTask = $('.done-section .task');
+  check('I1 展开后看得到已完成任务', Boolean(doneTask));
+  check('I2 已完成任务标题是「买牛奶」', doneTask?.querySelector('.task__title')?.textContent === '买牛奶');
+  check('I3 已完成任务带 task--done 类（删除线靠它）', doneTask?.classList.contains('task--done'));
+
+  doneTask.querySelector('.task__check').click();
+  await sleep(80);
+  check('J1 取消完成后回到活跃列表', activeTitles().join('|') === '买牛奶|交房租',
+    `实际：${activeTitles().join('|')}`);
+
+  // ---- K 折叠分组 ----
+  const caretBefore = $('.group__caret').textContent;
+  $('.group__toggle').click();
+  await sleep(80);
+  check('K1 折叠后任务列表消失', !$('.task'));
+  check('K2 折叠后箭头变成 ▸', $('.group__caret').textContent === '▸',
+    `${caretBefore} -> ${$('.group__caret').textContent}`);
+  $('.group__toggle').click();
+  await sleep(80);
+  check('K3 再点展开，任务回来', activeTitles().length === 2);
+
+  // ---- L HTML 特殊字符 ----
+  $('#add-task-button').click();
+  await sleep(60);
+  // 反斜杠不能省：字面写出闭合的 script 标签会让 HTML 解析器提前截断本脚本
+  const evil = '<script>alert(1)<\/script>';
+  $('.add-row__input').value = evil;
+  press($('.add-row__input'), 'Enter');
+  await sleep(80);
+  const evilTitle = $$('.task__title').find((n) => n.textContent.includes('alert'));
+  check('L1 HTML 字符原样显示成文本', evilTitle?.textContent === evil);
+  check('L2 没有注入新的 script 元素', $$('script').length === 1, `script 数量=${$$('script').length}`);
+
+  $('#add-task-button').click();
+  await sleep(60);
+  const amp = '5 > 3 & 2 < 4';
+  $('.add-row__input').value = amp;
+  press($('.add-row__input'), 'Enter');
+  await sleep(80);
+  check('L3 & 与尖括号原样显示',
+    $$('.task__title').some((n) => n.textContent === amp));
+
+  $('#add-task-button').click();
+  await sleep(60);
+  $('.add-row__input').value = '🚀 发布';
+  press($('.add-row__input'), 'Enter');
+  await sleep(80);
+  check('L4 emoji 正常显示', $$('.task__title').some((n) => n.textContent === '🚀 发布'));
+
+  // ---- M 超长标题 ----
+  $('#add-task-button').click();
+  await sleep(60);
+  $('.add-row__input').value = '长'.repeat(300);
+  press($('.add-row__input'), 'Enter');
+  await sleep(80);
+  const html = doc.documentElement;
+  check('M1 300 字标题不产生横向滚动',
+    html.scrollWidth <= html.clientWidth,
+    `scrollWidth=${html.scrollWidth} clientWidth=${html.clientWidth}`);
+  const longTitle = $$('.task__title').find((n) => n.textContent.length === 300);
+  const lh = longTitle ? parseFloat(win.getComputedStyle(longTitle).lineHeight) : 0;
+  check('M2 超长标题被限制在两行内',
+    Boolean(longTitle) && longTitle.getBoundingClientRect().height <= lh * 2 + 2,
+    `高=${longTitle?.getBoundingClientRect().height.toFixed(1)} 行高=${lh}`);
+
+  // ---- O/P 分组菜单：重命名 ----
+  $('.group__more').click();
+  await sleep(60);
+  const menuItems = $$('.menu__item').map((n) => n.textContent);
+  check('O1 分组菜单出现且有两项',
+    menuItems.join('|') === '重命名分组|删除分组', `实际：${menuItems.join('|')}`);
+
+  $$('.menu__item').find((n) => n.textContent === '重命名分组').click();
+  await sleep(80);
+  const renameInput = $('.group__rename');
+  check('P1 出现重命名输入框', Boolean(renameInput));
+  check('P2 重命名输入框已聚焦', doc.activeElement === renameInput);
+  renameInput.value = '工作';
+  press(renameInput, 'Enter');
+  await sleep(80);
+  check('P3 分组名改成功', $('.group__name')?.textContent === '工作',
+    `实际：${$('.group__name')?.textContent}`);
+
+  // ---- Q 新建分组并删除 ----
+  // 用 store 直接构造第二个分组比较麻烦，改用菜单删除现有分组，验证补默认分组
+  $('.group__more').click();
+  await sleep(60);
+  $$('.menu__item').find((n) => n.textContent === '删除分组').click();
+  await sleep(120);
+  check('Q1 删掉最后一个分组后自动补「未分组」',
+    $('.group__name')?.textContent === '未分组',
+    `实际：${$('.group__name')?.textContent}`);
+  check('Q2 组内任务一并删除', $$('.task:not(.task--done)').length === 0);
+  check('Q3 不是空白页（分组区块仍在）', $$('section.group').length === 1);
+
+  // ---- M3 分组名超长不撑破 ----
+  $('.group__more').click();
+  await sleep(60);
+  $$('.menu__item').find((n) => n.textContent === '重命名分组').click();
+  await sleep(80);
+  $('.group__rename').value = '组'.repeat(40);
+  press($('.group__rename'), 'Enter');
+  await sleep(80);
+  const html2 = doc.documentElement;
+  check('M3 40 字分组名不产生横向滚动',
+    html2.scrollWidth <= html2.clientWidth,
+    `scrollWidth=${html2.scrollWidth} clientWidth=${html2.clientWidth}`);
+
+  // ---- S 持久化 ----
+  const raw = win.localStorage.getItem('todo.v1');
+  check('S1 数据已写进 localStorage', Boolean(raw));
+  let parsed = null;
+  try { parsed = JSON.parse(raw); } catch { /* 下面会报错 */ }
+  check('S2 localStorage 里是合法 JSON 且有 version',
+    Boolean(parsed) && typeof parsed.version === 'number');
+
+  // ---- T 刷新后数据还在 ----
+  win.location.reload();
+  await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+  await sleep(200);
+  doc = frame.contentDocument;
+  check('T1 刷新后分组名还在',
+    doc.querySelector('.group__name')?.textContent === '组'.repeat(40));
+
+  lines.push('', fails === 0 ? '全部通过' : `有 ${fails} 项不通过`);
+  out.textContent = lines.join('\n');
+  out.className = fails === 0 ? '' : 'bad';
+}
+
+main().catch((e) => {
+  out.textContent = lines.join('\n') + '\n\n探针出错：' + e.message + '\n' + e.stack;
+  out.className = 'bad';
+});
+</script>
+</body>
+</html>

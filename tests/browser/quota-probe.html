@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>quota probe</title>
+<style>
+  body { margin: 0; font: 12px/1.45 monospace; background: #fff; }
+  pre { margin: 0; padding: 8px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<pre id="out">跑测试中…</pre>
+<script>
+const out = document.getElementById('out');
+const lines = [];
+let fails = 0;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function waitFor(predicate, timeoutMs = 5000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return true;
+    await sleep(50);
+  }
+  return false;
+}
+const check = (label, ok, detail = '') => {
+  if (!ok) fails += 1;
+  lines.push(`${ok ? '✓' : '✗'} ${label}${detail ? '\n    ' + detail : ''}`);
+};
+
+const now = Date.now();
+localStorage.setItem('todo.v1', JSON.stringify({
+  version: 1, savedAt: now,
+  groups: [{ id: 'g1', name: '未分组', order: 0 }],
+  tasks: [{ id: 't1', groupId: 'g1', title: '已有任务', note: '', done: false,
+    important: false, due: null, subtasks: [], createdAt: now, completedAt: null, order: 0 }],
+}));
+
+async function main() {
+  const frame = document.createElement('iframe');
+  frame.style.cssText = 'width:390px;height:620px;border:0;display:block;background:#fff;';
+  frame.src = '/';
+  document.body.append(frame);
+  await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+  await sleep(250);
+
+  const win = frame.contentWindow;
+  const doc = frame.contentDocument;
+  const $ = (s) => doc.querySelector(s);
+  const $$ = (s) => [...doc.querySelectorAll(s)];
+  const notice = () => ($('#notice').hidden ? '' : $('#notice').textContent);
+
+  const errors = [];
+  win.addEventListener('error', (e) => errors.push(e.message || String(e.error)));
+
+  // 必须在任何点击之前就替换掉对话框。真实 prompt() 在无头模式里会永久阻塞——
+  // 菜单里的「新建分组」会调到它，一旦点到就再也回不来了。
+  win.prompt = () => null;
+  win.confirm = () => false;
+
+  check('Q1 起步时没有提示条', notice() === '', `实际="${notice()}"`);
+
+  // 先验证一下「填充无关键」这个做法行不行——结论是不行：
+  // 应用写的是自己的键 todo.v1，属于等量覆盖，即使配额满了通常也能成功。
+  // 所以这条路径必须用真实的 QuotaExceededError 来触发。
+  let fillError = '';
+  try {
+    let chunk = 0;
+    for (;;) {
+      win.localStorage.setItem(`__fill_${chunk}__`, 'x'.repeat(256 * 1024));
+      chunk += 1;
+      if (chunk > 200) break;
+    }
+  } catch (e) {
+    fillError = e.name || String(e);
+  }
+  check('Q2 填充无关键确实能把配额撑满', fillError === 'QuotaExceededError',
+    `抛出的异常是 "${fillError}"`);
+
+  // 但应用覆盖自己的键仍然写得进去——确认这一点，免得误判成没测到
+  const probeSave = win.localStorage.setItem('todo.v1', '{"version":1}');
+  check('Q2b 配额满了以后应用覆盖自己的键其实仍然成功（所以上面那种填法测不到这条路径）',
+    probeSave === undefined);
+  for (let i = 0; i < 200; i += 1) win.localStorage.removeItem(`__fill_${i}__`);
+
+  // 真正触发这条路径：让 todo.v1 的写入抛 QuotaExceededError
+  const realSetItem = win.Storage.prototype.setItem;
+  win.Storage.prototype.setItem = function patchedSetItem(key, value) {
+    if (key === 'todo.v1') {
+      throw new win.DOMException('模拟存储已满', 'QuotaExceededError');
+    }
+    return realSetItem.call(this, key, value);
+  };
+
+  // 现在通过界面加一个任务
+  $('#add-task-button').click();
+  await sleep(150);
+  const input = $('.add-row__input');
+  input.value = '空间满了以后加的任务';
+  input.dispatchEvent(new win.KeyboardEvent('keydown', {
+    key: 'Enter', bubbles: true, cancelable: true,
+  }));
+
+  await waitFor(() => notice() !== '');
+  check('Q3 写盘失败后出现提示条', notice() !== '', `实际="${notice()}"`);
+  check('Q4 提示条说清了是存储已满，并指向导出备份',
+    notice().includes('已满') && notice().includes('导出'),
+    `实际="${notice()}"`);
+  check('Q5 任务仍然进了内存里的列表（界面不卡死）',
+    $$('.task__title').some((n) => n.textContent === '空间满了以后加的任务'),
+    `实际=${$$('.task__title').map((n) => n.textContent).join(',')}`);
+  check('Q6 应用没有抛出未捕获的异常', errors.length === 0, errors.join(' | '));
+
+  // ---- 关键：提示条不能挡住它自己让用户去点的那个按钮 ----
+  // 用真实坐标做命中测试，不能用程序化 click()——那会绕过命中判定，
+  // 正好漏掉「元素被别的元素盖住」这类缺陷。
+  {
+    const mb = $('#menu-button');
+    const r = mb.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const hit = doc.elementFromPoint(cx, cy);
+
+    check('Q6b 提示条出现时，顶栏 ⋯ 仍能被真实点击命中',
+      hit === mb || mb.contains(hit),
+      `该坐标 (${cx.toFixed(0)},${cy.toFixed(0)}) 命中的是 `
+      + `<${hit?.tagName} class="${hit?.className}">；`
+      + `提示条 hidden=${$('#notice').hidden} 文案="${notice()}"`);
+
+    // 真的在那个坐标上派发一次 click，看菜单会不会开
+    if (hit) {
+      hit.dispatchEvent(new win.MouseEvent('click', {
+        bubbles: true, cancelable: true, clientX: cx, clientY: cy,
+      }));
+      await sleep(200);
+      check('Q6c 在 ⋯ 的真实位置点一下，菜单能打开',
+        $$('.menu__item').length === 4,
+        `实际弹出了 ${$$('.menu__item').length} 项`);
+      // 关掉菜单：点文档任意处即可（menu.js 监听 document 的 click 关闭）
+      doc.body.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+      await sleep(150);
+    }
+
+    // 详情页的 ← 同理
+    win.location.hash = '#/task/t1';
+    await sleep(250);
+    const back = $('#detail-back');
+    if (back) {
+      const br = back.getBoundingClientRect();
+      const backHit = doc.elementFromPoint(br.left + br.width / 2, br.top + br.height / 2);
+      check('Q6d 提示条没有盖住详情页的 ←',
+        backHit === back || back.contains(backHit),
+        `命中的是 <${backHit?.tagName} class="${backHit?.className}">`);
+    }
+    win.location.hash = '#/';
+    await sleep(200);
+  }
+
+  // 还能继续操作：折叠分组、打开顶栏菜单
+  $('.group__toggle').click();
+  await sleep(120);
+  check('Q7 存储满了之后界面仍能正常交互（折叠生效）',
+    $$('.task').length === 0, `实际=${$$('.task').length} 条任务可见`);
+  $('.group__toggle').click();
+  await sleep(120);
+
+  $('#menu-button').click();
+  await sleep(150);
+  check('Q8 存储满了之后顶栏菜单仍能打开', $$('.menu__item').length === 4,
+    `实际=${$$('.menu__item').length} 项`);
+
+  // 导出仍然可用（这正是提示条让用户去做的事）
+  let exported = null;
+  const realCreate = win.URL.createObjectURL.bind(win.URL);
+  win.URL.createObjectURL = (blob) => { exported = blob; return realCreate(new win.Blob([''])); };
+  const realCreateElement = doc.createElement.bind(doc);
+  doc.createElement = (tag, options) => {
+    const node = realCreateElement(tag, options);
+    if (String(tag).toLowerCase() === 'a') node.click = () => {};
+    return node;
+  };
+
+  $$('.menu__item').find((n) => n.textContent === '导出备份').click();
+  await waitFor(() => exported !== null);
+  check('Q9 存储满了仍然能导出备份（这是提示条给出的出路）', exported !== null);
+
+  if (exported) {
+    const text = await exported.text();
+    check('Q10 导出的备份包含内存里的最新状态（含刚加的那条）',
+      text.includes('空间满了以后加的任务'),
+      `长度=${text.length}`);
+  }
+
+  // 恢复，免得影响后面的探针
+  win.Storage.prototype.setItem = realSetItem;
+
+  lines.push('', fails === 0 ? '全部通过' : `有 ${fails} 项不通过`);
+  out.textContent = lines.join('\n');
+}
+
+main().catch((e) => {
+  out.textContent = lines.join('\n') + '\n\n探针出错：' + e.message + '\n' + e.stack;
+});
+</script>
+</body>
+</html>

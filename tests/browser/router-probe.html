@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>router probe</title>
+<style>
+  body { margin: 0; font: 13px/1.5 monospace; background: #fff; }
+  pre { margin: 0; padding: 10px; white-space: pre-wrap; }
+  .ok { color: #0a7d2c; }
+  .bad { color: #c00; font-weight: bold; }
+</style>
+</head>
+<body>
+<pre id="out">跑测试中…</pre>
+
+<script>
+const out = document.getElementById('out');
+const lines = [];
+let failures = 0;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function readState(frame) {
+  const doc = frame.contentDocument;
+  const listHidden = doc.getElementById('view-list').hidden;
+  const detailHidden = doc.getElementById('view-detail').hidden;
+  let shown = 'both-hidden';
+  if (!listHidden && detailHidden) shown = 'list';
+  else if (listHidden && !detailHidden) shown = 'detail';
+  return { shown, label: doc.getElementById('detail-group-name').textContent };
+}
+
+async function main() {
+  const frame = document.createElement('iframe');
+  frame.style.cssText = 'width:390px;height:300px;border:0;position:absolute;left:-9999px;';
+  frame.src = '/';
+  document.body.append(frame);
+
+  await new Promise((resolve) => {
+    if (frame.contentDocument?.readyState === 'complete') resolve();
+    else frame.addEventListener('load', resolve, { once: true });
+  });
+  await sleep(150);
+
+  const cases = [
+    { label: '初始加载（地址无 hash）', hash: null, expect: 'list' },
+    { label: '设置 #/task/t_abc', hash: '#/task/t_abc', expect: 'detail' },
+    { label: '设置 #/task/（缺 id）', hash: '#/task/', expect: 'list' },
+    { label: '设置 #/乱七八糟（未知）', hash: '#/乱七八糟', expect: 'list' },
+    { label: '设置 #/task/a/b（多段）', hash: '#/task/a/b', expect: 'list' },
+    { label: '回到 #/', hash: '#/', expect: 'list' },
+    { label: '再来一次 #/task/t_xyz', hash: '#/task/t_xyz', expect: 'detail' },
+  ];
+
+  for (const c of cases) {
+    if (c.hash !== null) {
+      frame.contentWindow.location.hash = c.hash;
+      await sleep(150);
+    }
+    const got = readState(frame);
+    const pass = got.shown === c.expect;
+    if (!pass) failures += 1;
+    lines.push(
+      `${pass ? '✓' : '✗'} ${c.label}\n`
+      + `    期望=${c.expect} 实际=${got.shown} 顶栏文字="${got.label}"`,
+    );
+  }
+
+  // 历史记录：后退应该回到上一步
+  const before = readState(frame);
+  frame.contentWindow.history.back();
+  await sleep(250);
+  const afterBack = readState(frame);
+  const backPass = afterBack.shown !== before.shown;
+  if (!backPass) failures += 1;
+  lines.push(
+    `${backPass ? '✓' : '✗'} 后退键\n`
+    + `    后退前=${before.shown} 后退后=${afterBack.shown}`,
+  );
+
+  frame.contentWindow.history.forward();
+  await sleep(250);
+  const afterForward = readState(frame);
+  const fwdPass = afterForward.shown === before.shown;
+  if (!fwdPass) failures += 1;
+  lines.push(
+    `${fwdPass ? '✓' : '✗'} 前进键\n`
+    + `    前进后=${afterForward.shown}（应回到 ${before.shown}）`,
+  );
+
+  lines.push('', failures === 0 ? '全部通过（含后退/前进）' : `有 ${failures} 项不通过`);
+  out.textContent = lines.join('\n');
+  out.className = failures === 0 ? 'ok' : 'bad';
+}
+
+main().catch((e) => {
+  out.textContent = '探针本身出错：' + e.message + '\n' + e.stack;
+  out.className = 'bad';
+});
+</script>
+</body>
+</html>

@@ -61,4 +61,22 @@
 
 ## 开发流程
 
-本项目走 Superpowers 流程：brainstorming（已完成）→ writing-plans（待做）→ 实施。设计未获批准前不要写产品代码。
+本项目走 Superpowers 流程：brainstorming（已完成）→ writing-plans（已完成）→ 实施（已完成 15 个任务）→ 最终审查（已完成）。
+
+**每改动一处，至少跑这两样**：
+
+```bash
+node --test                      # 单元测试：数据层、存储层、路由、拖拽落点计算
+node tools/run-browser-tests.mjs # 浏览器回归：界面层（需要先跑着 node tools/serve.mjs 8000）
+```
+
+浏览器回归测试在 `tests/browser/`，说明见那里的 README。**它们是必要的**——实施期间抓到两个单测结构上抓不到的缺陷（一个是重渲染丢光标，一个是提示条把顶栏 `⋯` 盖住）。
+
+## 这个项目上踩过的坑（别再踩）
+
+- **`window.prompt` / `window.confirm` 在无头浏览器里会永久阻塞**，任何自动化里都要先替换掉。
+- **无头模式下页面不产生新帧，`requestAnimationFrame` 不回调**。拖拽的落点计算靠它调度，写自动化时要装替身，且 `location.reload()` 之后要**重装**（新窗口的原生 rAF 会把它冲掉）。
+- **给页面种数据必须在 iframe 首次加载之前**从父页面写。用「先加载再 `setItem` + `reload`」会被应用的 `pagehide` 兜底覆盖——那是正确行为，不是 bug。
+- **验证「某个按钮还能不能点」必须用真实坐标命中测试**（`elementFromPoint` + 在该坐标派发 click）。程序化 `.click()` 绕过命中判定，发现不了遮挡。
+- **「存储写满」不能用「塞满无关键」来测**。应用写的是自己的键，属于等量覆盖，配额满了通常仍然成功。必须让那个键的写入真的抛 `QuotaExceededError`。
+- **Edge 无头模式在 Windows 下有最小窗口宽度约 492 CSS px**，`--window-size=390` 会被钳到 492 但截图仍按 390 裁切，右侧内容被切掉。要看 390px 手机视口，用 `tests/browser/` 里那种 iframe 包一层。

@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>detail view probe</title>
+<style>
+  body { margin: 0; font: 12px/1.45 monospace; background: #fff; }
+  pre { margin: 0; padding: 8px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<pre id="out">跑测试中…</pre>
+<script>
+const out = document.getElementById('out');
+const lines = [];
+let fails = 0;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const check = (label, ok, detail = '') => {
+  if (!ok) fails += 1;
+  lines.push(`${ok ? '✓' : '✗'} ${label}${detail ? '\n    ' + detail : ''}`);
+};
+
+function seedPayload() {
+  const now = Date.now();
+  return {
+    version: 1, savedAt: now,
+    groups: [
+      { id: 'g1', name: '工作', order: 0 },
+      { id: 'g2', name: '生活', order: 1 },
+    ],
+    tasks: [
+      { id: 't1', groupId: 'g1', title: '写周报', note: '', done: false,
+        important: false, due: null, subtasks: [], createdAt: now - 3600000,
+        completedAt: null, order: 0 },
+      { id: 't2', groupId: 'g1', title: '交房租', note: '', done: false,
+        important: false, due: null, subtasks: [], createdAt: now - 7200000,
+        completedAt: null, order: 1 },
+      { id: 't3', groupId: 'g2', title: '买牛奶', note: '', done: false,
+        important: false, due: null, subtasks: [], createdAt: now - 60000,
+        completedAt: null, order: 0 },
+    ],
+  };
+}
+
+async function main() {
+  // 关键：数据要在 iframe **首次加载之前**种好，而且要从父页面写——
+  // 父页面与 iframe 同源，用的是同一份 localStorage。
+  //
+  // 不能用「先加载 iframe → setItem → reload」那套：应用在 pagehide 时会把
+  // 内存里的旧状态 flush 回 localStorage（那是 spec §5 要求的正确行为），
+  // 于是刚种下的数据会被旧数据覆盖掉。
+  localStorage.setItem('todo.v1', JSON.stringify(seedPayload()));
+
+  const frame = document.createElement('iframe');
+  frame.style.cssText = 'width:390px;height:620px;border:0;display:block;background:#fff;';
+  frame.src = '/';
+  document.body.append(frame);
+
+  await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+  const win = frame.contentWindow;
+  await sleep(200);
+
+  let doc = frame.contentDocument;
+  win.confirm = () => true;
+  const errors = [];
+  win.addEventListener('error', (e) => errors.push(e.message || String(e.error)));
+  const $ = (s) => doc.querySelector(s);
+  const $$ = (s) => [...doc.querySelectorAll(s)];
+
+  await sleep(150);
+  check('0 应用初始化没有抛错', errors.length === 0, errors.join(' | '));
+  check('0b 列表渲染出 3 条任务', $$('.task').length === 3,
+    `实际=${$$('.task').length}，group-list 子节点=${$('#group-list')?.children.length}`);
+  const fire = (node, type) => node.dispatchEvent(new win.Event(type, { bubbles: true }));
+  const key = (node, k) => node.dispatchEvent(
+    new win.KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }),
+  );
+  const stored = () => JSON.parse(win.localStorage.getItem('todo.v1'));
+
+  // ---- 进入详情 ----
+  $('.task[data-task-id="t1"]').click();
+  await sleep(150);
+  check('1 点任务后进入详情视图',
+    !$('#view-detail').hidden && $('#view-list').hidden);
+  check('2 顶栏显示分组名', $('#detail-group-name').textContent === '工作',
+    `实际="${$('#detail-group-name').textContent}"`);
+  check('3 标题框里有任务标题', $('.detail__title')?.value === '写周报');
+  check('4 有返回按钮', Boolean($('#detail-back')));
+
+  // ---- 标题：快速连续输入不丢字、不跳光标 ----
+  {
+    const titleEl = $('.detail__title');
+    titleEl.focus();
+    const target = 'abcdefghijklmnop';
+    for (const ch of target) {
+      titleEl.value += ch;
+      fire(titleEl, 'input');
+    }
+    check('5 连续输入后值完整（一个字都不丢）',
+      titleEl.value === '写周报' + target, `实际="${titleEl.value}"`);
+    check('6 输入框没有被重渲染替换掉（还是同一个节点）',
+      $('.detail__title') === titleEl);
+    check('7 焦点仍在标题框', doc.activeElement === titleEl);
+  }
+
+  // ---- 重要 / 完成 ----
+  {
+    $('.toggle--important').click();
+    await sleep(120);
+    check('8 点重要后按钮进入选中态',
+      $('.toggle--important').classList.contains('toggle--on'));
+
+    $('.detail__title').focus();
+    $('#detail-back').click();
+    await sleep(150);
+    check('9 返回后列表里该任务整行淡红底',
+      $('.task[data-task-id="t1"]').classList.contains('task--important'));
+    check('10 重要任务复选框里有红点（DOM 里存在 dot 节点）',
+      Boolean($('.task[data-task-id="t1"] .task__check-dot')));
+
+    $('.task[data-task-id="t1"]').click();
+    await sleep(150);
+    $('.toggle:not(.toggle--important)').click();   // 完成
+    await sleep(120);
+    $('#detail-back').click();
+    await sleep(150);
+    check('11 勾完成后该任务从活跃列表消失',
+      !$('.task:not(.task--done)[data-task-id="t1"]'));
+    check('12 出现已完成折叠行', Boolean($('.done-section__toggle')));
+
+    $('.done-section__toggle').click();
+    await sleep(120);
+    $('.done-section .task[data-task-id="t1"] .task__check').click();
+    await sleep(150);
+    check('13 在已完成区取消完成后回到活跃列表',
+      Boolean($('.task:not(.task--done)[data-task-id="t1"]')));
+  }
+
+  // ---- 截止日期 ----
+  {
+    $('.task[data-task-id="t2"]').click();
+    await sleep(150);
+    const due = $('#detail-due');
+    due.value = '2026-10-20';
+    fire(due, 'change');
+    await sleep(150);
+    check('14 设置截止日期后立刻写盘',
+      stored().tasks.find((t) => t.id === 't2').due === '2026-10-20');
+    $('#detail-back').click();
+    await sleep(150);
+    check('15 列表里显示 10-20',
+      $$('.task[data-task-id="t2"] .task__meta-item').some((n) => n.textContent === '10-20'),
+      `实际=${$$('.task[data-task-id="t2"] .task__meta-item').map((n) => n.textContent).join(',')}`);
+  }
+
+  // ---- 备注：防抖 + visibilitychange 兜底 ----
+  {
+    $('.task[data-task-id="t2"]').click();
+    await sleep(150);
+    const note = $('#detail-note');
+    note.focus();
+    note.value = '房东电话 138xxxx';
+    fire(note, 'input');
+    // 此刻防抖还没到期，先确认真的还没写盘
+    check('16 文本输入不立刻写盘（防抖生效）',
+      stored().tasks.find((t) => t.id === 't2').note === '',
+      `实际="${stored().tasks.find((t) => t.id === 't2').note}"`);
+
+    // 三重兜底之一：页面被切到后台
+    Object.defineProperty(doc, 'visibilityState', { get: () => 'hidden', configurable: true });
+    doc.dispatchEvent(new win.Event('visibilitychange'));
+    check('17 切到后台时立刻落盘（不丢最后几个字）',
+      stored().tasks.find((t) => t.id === 't2').note === '房东电话 138xxxx',
+      `实际="${stored().tasks.find((t) => t.id === 't2').note}"`);
+  }
+
+  // ---- 备注里的 HTML 字符 ----
+  {
+    const note = $('#detail-note');
+    note.focus();
+    note.value = '<b>粗体</b>';
+    fire(note, 'input');
+    note.blur();
+    await sleep(150);
+    $('#detail-back').click();
+    await sleep(150);
+    check('18 备注里有内容时列表显示 ≡ 标记',
+      $$('.task[data-task-id="t2"] .task__meta-item').some((n) => n.textContent === '≡'));
+    check('19 备注里的 HTML 当字面文本存（没被解析）',
+      stored().tasks.find((t) => t.id === 't2').note === '<b>粗体</b>');
+  }
+
+  // ---- 分组切换 ----
+  {
+    $('.task[data-task-id="t2"]').click();
+    await sleep(150);
+    const select = $('#detail-group');
+    select.value = 'g2';
+    fire(select, 'change');
+    await sleep(150);
+    check('20 换组后立刻写盘', stored().tasks.find((t) => t.id === 't2').groupId === 'g2');
+    $('#detail-back').click();
+    await sleep(150);
+    const g2Titles = $$('.task-list[data-group-id="g2"] > .task')
+      .map((n) => n.querySelector('.task__title').textContent);
+    check('21 任务出现在新分组且排在末尾',
+      g2Titles[g2Titles.length - 1] === '交房租', `生活组=${g2Titles.join(',')}`);
+  }
+
+  // ---- 子任务 ----
+  {
+    $('.task[data-task-id="t1"]').click();
+    await sleep(150);
+    const add = $('.subtask-add__input');
+    for (const text of ['看合同', '转账', '要发票']) {
+      add.value = text;
+      key(add, 'Enter');
+      await sleep(120);
+    }
+    check('22 加了三条子任务', $$('.subtask').length === 3,
+      `实际=${$$('.subtask').length}`);
+
+    $('.subtask[data-subtask-id] .subtask__check').click();
+    await sleep(120);
+    check('23 勾一条子任务后它带 subtask--done 类',
+      $$('.subtask')[0].classList.contains('subtask--done'));
+
+    $('#detail-back').click();
+    await sleep(150);
+    check('24 列表里显示 1/3',
+      $$('.task[data-task-id="t1"] .task__meta-item').some((n) => n.textContent === '1/3'),
+      `实际=${$$('.task[data-task-id="t1"] .task__meta-item').map((n) => n.textContent).join(',')}`);
+
+    $('.task[data-task-id="t1"]').click();
+    await sleep(150);
+    for (const box of $$('.subtask .subtask__check')) {
+      if (!box.classList.contains('subtask__check--on')) {
+        box.click();
+        await sleep(100);
+      }
+    }
+    check('25 三条子任务全勾完', stored().tasks.find((t) => t.id === 't1')
+      .subtasks.every((s) => s.done));
+    check('26 子任务全完成也不自动完成父任务',
+      stored().tasks.find((t) => t.id === 't1').done === false);
+
+    $$('.subtask .subtask__delete')[0].click();
+    await sleep(150);
+    check('27 删掉一条子任务后还剩两条', $$('.subtask').length === 2);
+  }
+
+  // ---- 子任务文本连续输入 ----
+  {
+    const row = $('.subtask .subtask__text');
+    row.focus();
+    const target = 'XYZ';
+    for (const ch of target) {
+      row.value += ch;
+      fire(row, 'input');
+    }
+    check('28 子任务文本连续输入不丢字且节点未被替换',
+      row.value.endsWith(target) && $('.subtask .subtask__text') === row,
+      `实际="${row.value}"`);
+  }
+
+  // ---- 元信息 ----
+  {
+    const metaText = $('.detail__meta').textContent;
+    check('29 元信息里有「创建于」和「完成于」',
+      metaText.includes('创建于') && metaText.includes('完成于'));
+    check('30 未完成时「完成于」显示 —',
+      $$('.detail__meta-value')[1].textContent === '—',
+      `实际="${$$('.detail__meta-value')[1].textContent}"`);
+    check('31 「创建于」是真实时间不是 1970',
+      /^20\d\d-/.test($$('.detail__meta-value')[0].textContent),
+      `实际="${$$('.detail__meta-value')[0].textContent}"`);
+  }
+
+  // ---- 不存在的任务 ----
+  {
+    win.location.hash = '#/task/t_nonexistent';
+    await sleep(200);
+    check('32 不存在的任务给出提示而不是空白页',
+      $('.empty-state__title')?.textContent === '这个任务不存在',
+      `实际="${$('.empty-state__title')?.textContent}"`);
+  }
+
+  // ---- 删除任务 ----
+  {
+    win.location.hash = '#/task/t3';
+    await sleep(200);
+    check('33 删前能看到该任务', $('.detail__title')?.value === '买牛奶');
+    $('.detail__delete').click();
+    await sleep(200);
+    check('34 确认删除后回到列表',
+      !$('#view-list').hidden && win.location.hash !== '#/task/t3');
+    check('35 任务已从列表消失', !$('.task[data-task-id="t3"]'));
+    check('36 任务已从存储消失',
+      !stored().tasks.some((t) => t.id === 't3'));
+  }
+
+  // ---- 超长标题不撑破 ----
+  {
+    win.location.hash = '#/task/t1';
+    await sleep(200);
+    const titleEl = $('.detail__title');
+    titleEl.focus();
+    titleEl.value = '长'.repeat(300);
+    fire(titleEl, 'input');
+    await sleep(200);
+    const html = doc.documentElement;
+    check('37 300 字标题不产生横向滚动',
+      html.scrollWidth <= html.clientWidth,
+      `scrollWidth=${html.scrollWidth} clientWidth=${html.clientWidth}`);
+
+    $('#detail-back').click();
+    await sleep(200);
+    const html2 = doc.documentElement;
+    check('38 列表中超长标题同样不横向溢出',
+      html2.scrollWidth <= html2.clientWidth,
+      `scrollWidth=${html2.scrollWidth} clientWidth=${html2.clientWidth}`);
+  }
+
+  // ---- 列表滚动位置保留 ----
+  {
+    const scroller = $('#list-scroll');
+    scroller.scrollTop = 0;
+    await sleep(60);
+    $('.task[data-task-id="t1"]').click();
+    await sleep(200);
+    $('#detail-back').click();
+    await sleep(200);
+    check('39 从详情返回后列表仍然可用', Boolean($('#list-scroll')));
+  }
+
+  lines.push('', fails === 0 ? '全部通过' : `有 ${fails} 项不通过`);
+  out.textContent = lines.join('\n');
+}
+
+main().catch((e) => {
+  out.textContent = lines.join('\n') + '\n\n探针出错：' + e.message + '\n' + e.stack;
+});
+</script>
+</body>
+</html>

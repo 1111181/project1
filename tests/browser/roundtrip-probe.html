@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>backup round-trip probe</title>
+<style>
+  body { margin: 0; font: 12px/1.45 monospace; background: #fff; }
+  pre { margin: 0; padding: 8px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<pre id="out">跑测试中…</pre>
+<script>
+const out = document.getElementById('out');
+const lines = [];
+let fails = 0;
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function waitFor(predicate, timeoutMs = 8000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (predicate()) return true;
+    await sleep(50);
+  }
+  return false;
+}
+const check = (label, ok, detail = '') => {
+  if (!ok) fails += 1;
+  lines.push(`${ok ? '✓' : '✗'} ${label}${detail ? '\n    ' + detail : ''}`);
+  out.textContent = lines.join('\n');
+};
+
+const now = Date.now();
+
+// 一份内容丰富的种子数据：多分组、重要、已完成、截止日期、备注、子任务、乱序的 order
+const SEED = {
+  version: 1, savedAt: now,
+  groups: [
+    { id: 'g1', name: '工作', order: 0 },
+    { id: 'g2', name: '生活', order: 1 },
+    { id: 'g3', name: '购物', order: 2 },
+  ],
+  tasks: [
+    { id: 't1', groupId: 'g1', title: '写周报', note: '', done: false,
+      important: false, due: null, subtasks: [], createdAt: now, completedAt: null, order: 0 },
+    { id: 't2', groupId: 'g1', title: '交房租', note: '房东电话 138xxxx\n月底前转',
+      done: false, important: true, due: '2026-10-20', createdAt: now + 1,
+      completedAt: null, order: 1,
+      subtasks: [{ id: 's1', text: '看合同', done: true }, { id: 's2', text: '转账', done: false }] },
+    { id: 't3', groupId: 'g1', title: '回邮件', note: '', done: true,
+      important: false, due: null, subtasks: [], createdAt: now + 2,
+      completedAt: now + 3, order: 2 },
+    { id: 't4', groupId: 'g2', title: '买牛奶', note: '', done: false,
+      important: true, due: '2027-01-05', subtasks: [], createdAt: now + 4,
+      completedAt: null, order: 0 },
+    { id: 't5', groupId: 'g3', title: '<script>alert(1)<\/script>', note: '5 > 3 & 2 < 4',
+      done: false, important: false, due: null, subtasks: [], createdAt: now + 5,
+      completedAt: null, order: 0 },
+  ],
+};
+
+async function main() {
+  localStorage.setItem('todo.v1', JSON.stringify(SEED));
+
+  const frame = document.createElement('iframe');
+  frame.style.cssText = 'width:390px;height:620px;border:0;display:block;background:#fff;';
+  frame.src = '/';
+  document.body.append(frame);
+  await new Promise((r) => frame.addEventListener('load', r, { once: true }));
+  await sleep(280);
+
+  const win = frame.contentWindow;
+  const doc = frame.contentDocument;
+  const $ = (s) => doc.querySelector(s);
+  const $$ = (s) => [...doc.querySelectorAll(s)];
+
+  let confirmAnswer = true;
+  win.confirm = () => confirmAnswer;
+
+  // 捕获导出内容，且不让它真的下载（无头模式会挂在下载上）
+  let exported = null;
+  const realCreate = win.URL.createObjectURL.bind(win.URL);
+  win.URL.createObjectURL = (blob) => { exported = blob; return realCreate(new win.Blob([''])); };
+  const realCreateElement = doc.createElement.bind(doc);
+  doc.createElement = (tag, options) => {
+    const node = realCreateElement(tag, options);
+    if (String(tag).toLowerCase() === 'a') node.click = () => {};
+    return node;
+  };
+
+  const clickMenuItem = async (label) => {
+    $('#menu-button').click();
+    await sleep(100);
+    const item = $$('.menu__item').find((n) => n.textContent === label);
+    if (!item) return false;
+    item.click();
+    await sleep(200);
+    return true;
+  };
+  const stored = () => JSON.parse(win.localStorage.getItem('todo.v1'));
+
+  // 先把界面上的顺序显示出来，确认导出前列表是对的
+  const titlesBefore = $$('.task:not(.task--done) .task__title').map((n) => n.textContent);
+  check('R1 导出前界面渲染出 5 条任务里的 4 条活跃任务（回邮件已完成）',
+    titlesBefore.length === 4, `实际 ${titlesBefore.length} 条：${titlesBefore.join(' / ')}`);
+
+  // ---- 1. 导出 ----
+  await clickMenuItem('导出备份');
+  await waitFor(() => exported !== null);
+  check('R2 导出产生了文件', Boolean(exported));
+  const backupText = await exported.text();
+  const backup = JSON.parse(backupText);
+  check('R3 备份里的分组与任务数与原来一致',
+    backup.groups.length === 3 && backup.tasks.length === 5,
+    `实际 ${backup.groups.length} 个分组、${backup.tasks.length} 个任务`);
+
+  // ---- 2. 清空 ----
+  await clickMenuItem('清空全部数据');
+  await waitFor(() => stored().tasks.length === 0);
+  check('R4 清空后只剩一个默认分组、零任务',
+    stored().groups.length === 1 && stored().tasks.length === 0,
+    `实际 ${stored().groups.length} 个分组、${stored().tasks.length} 个任务`);
+  check('R5 清空后界面是空的', $$('.task').length === 0 && $$('section.group').length === 1);
+
+  // ---- 3. 导入刚才导出的那份 ----
+  const dt = new win.DataTransfer();
+  dt.items.add(new win.File([backupText], 'todo-backup.json', { type: 'application/json' }));
+  const importInput = $('#import-input');
+  importInput.files = dt.files;
+  importInput.dispatchEvent(new win.Event('change'));
+  await waitFor(() => stored().tasks.length > 0);
+  await sleep(250);
+
+  // ---- 4. 逐字段比对 ----
+  const after = stored();
+
+  const normalize = (data) => ({
+    groups: [...data.groups].sort((a, b) => a.id.localeCompare(b.id)),
+    tasks: [...data.tasks].sort((a, b) => a.id.localeCompare(b.id)).map((t) => ({
+      ...t,
+      subtasks: [...t.subtasks].sort((a, b) => a.id.localeCompare(b.id)),
+    })),
+  });
+
+  const before = normalize(SEED);
+  const roundTrip = normalize(after);
+
+  check('R6 往返后分组完全一致（id、名字、order）',
+    JSON.stringify(roundTrip.groups) === JSON.stringify(before.groups),
+    `往返=${JSON.stringify(roundTrip.groups)}\n    原本=${JSON.stringify(before.groups)}`);
+
+  check('R7 往返后任务数量一致', roundTrip.tasks.length === before.tasks.length,
+    `往返 ${roundTrip.tasks.length}，原本 ${before.tasks.length}`);
+
+  // 逐条逐字段比对，报出第一处差异，别只说「不一致」
+  let firstDiff = null;
+  for (let i = 0; i < before.tasks.length && !firstDiff; i += 1) {
+    const a = before.tasks[i];
+    const b = roundTrip.tasks[i];
+    for (const key of Object.keys(a)) {
+      if (JSON.stringify(a[key]) !== JSON.stringify(b[key])) {
+        firstDiff = `任务 ${a.id} 的 ${key}：原本 ${JSON.stringify(a[key])}，往返后 ${JSON.stringify(b[key])}`;
+        break;
+      }
+    }
+  }
+  check('R8 往返后每个任务的每个字段都一致（含备注、子任务、截止日期、重要、完成时间、order）',
+    firstDiff === null, firstDiff || '逐字段全等');
+
+  // ---- 5. 界面也要对 ----
+  const titlesAfter = $$('.task:not(.task--done) .task__title').map((n) => n.textContent);
+  check('R9 导入后界面显示与导出前一致',
+    titlesAfter.join('|') === titlesBefore.join('|'),
+    `导出前=${titlesBefore.join('|')}\n    导入后=${titlesAfter.join('|')}`);
+  check('R10 重要任务在界面上仍然带红底类',
+    $$('.task--important').length === 2, `实际 ${$$('.task--important').length} 条带红底`);
+  check('R11 已完成任务仍然在已完成折叠区里',
+    $('.done-section__toggle')?.textContent === '已完成 1 项',
+    `实际="${$('.done-section__toggle')?.textContent}"`);
+
+  lines.push('', fails === 0 ? '全部通过' : `有 ${fails} 项不通过`);
+  out.textContent = lines.join('\n');
+}
+
+main().catch((e) => {
+  out.textContent = lines.join('\n') + '\n\n探针出错：' + e.message + '\n' + e.stack;
+});
+</script>
+</body>
+</html>
