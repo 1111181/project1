@@ -49,7 +49,7 @@
 
 ## 开发环境注意事项
 
-- **本地预览不能双击 `index.html`**。ES modules 在 `file://` 下会被浏览器 CORS 拦截，必须起静态服务器（如 `python -m http.server 8000`）。GitHub Pages 上无此问题。
+- **本地预览不能双击 `index.html`**。ES modules 在 `file://` 下会被浏览器 CORS 拦截，必须起静态服务器（`node tools/serve.mjs 8000`）。GitHub Pages 上无此问题。
 - 本机 git 已设置 `git config --global http.schannelCheckRevoke false`。这是 2026-10-15 为修复国内网络下 `npx skills add` 无法 clone GitHub 而设的（schannel 证书吊销检查超时）。改动是全局的，若以后 git 出现证书问题可回退此项。
 - 本机未安装 `gh` CLI，推送用原生 git。
 

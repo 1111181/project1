@@ -45,7 +45,7 @@
 - 不引入 Service Worker，离线依赖浏览器常规缓存
 - 推送是对外发布动作，执行前会单独征得确认
 
-**开发期预览**：ES modules 在 `file://` 下会被浏览器 CORS 拦截，所以本地预览必须起一个静态服务器（如 `python -m http.server 8000`），不能直接双击 `index.html`。这是选用 ES modules 的代价，换来的是代码可以分文件、可被 node 单测直接 import。
+**开发期预览**：ES modules 在 `file://` 下会被浏览器 CORS 拦截，所以本地预览必须起一个静态服务器（`node tools/serve.mjs 8000`），不能直接双击 `index.html`。这是选用 ES modules 的代价，换来的是代码可以分文件、可被 node 单测直接 import。
 
 ---
 

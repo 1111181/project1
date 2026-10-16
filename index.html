@@ -1,11 +1,49 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Document</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>我的待办</title>
+
+  <!-- 亮暗两套主题色，让手机状态栏跟着变 -->
+  <meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#191919" media="(prefers-color-scheme: dark)" />
+
+  <!-- 加到主屏幕后全屏打开（轻量 PWA，见 spec §11） -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="待办" />
+
+  <link rel="stylesheet" href="css/tokens.css" />
+  <link rel="stylesheet" href="css/app.css" />
 </head>
 <body>
-    
+  <!-- 存储不可用、数据损坏等情况的提示条 -->
+  <div id="notice" class="notice" role="status" hidden></div>
+
+  <!-- 列表视图 -->
+  <main id="view-list" class="view">
+    <header class="topbar">
+      <h1 class="topbar__title">我的待办</h1>
+      <button id="menu-button" class="icon-button" type="button"
+              aria-label="更多操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
+    </header>
+
+    <div id="list-scroll" class="scroll">
+      <div id="group-list" class="group-list"></div>
+    </div>
+
+    <button id="add-task-button" class="fab" type="button">＋ 添加任务</button>
+  </main>
+
+  <!-- 详情视图 -->
+  <section id="view-detail" class="view view--detail" hidden>
+    <header class="topbar">
+      <button id="detail-back" class="icon-button" type="button" aria-label="返回">←</button>
+      <span id="detail-group-name" class="topbar__subtitle"></span>
+    </header>
+
+    <div id="detail-scroll" class="scroll"></div>
+  </section>
 </body>
 </html>

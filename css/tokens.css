@@ -1,0 +1,78 @@
+/* 设计变量。全部颜色、间距、字号、字重、圆角、时长都从这里取。
+   组件样式里不允许出现写死的色值。 */
+
+:root {
+  color-scheme: light dark;
+
+  /* ---------- 间距：严格 8 点栅格 ---------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* ---------- 字号：只 4 档 ---------- */
+  --font-title: 22px;
+  --font-group: 15px;
+  --font-task: 16px;
+  --font-meta: 13px;
+
+  /* ---------- 字重：只 2 档 ---------- */
+  --weight-regular: 400;
+  --weight-semibold: 600;
+
+  /* ---------- 形状 ---------- */
+  --radius-card: 12px;
+  --radius-button: 10px;
+  --radius-pill: 999px;
+
+  /* ---------- 动效 ---------- */
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 240ms;
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+
+  /* ---------- 尺寸 ---------- */
+  --tap-min: 44px;
+  --fab-clearance: 88px;
+
+  --font-family: -apple-system, BlinkMacSystemFont, "PingFang SC",
+    "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+
+  /* ---------- 颜色：亮色（默认） ---------- */
+  --color-bg: #FFFFFF;
+  --color-bg-subtle: #F7F7F5;
+  --color-text: #37352F;
+  --color-text-secondary: rgba(55, 53, 47, 0.6);
+  --color-text-tertiary: rgba(55, 53, 47, 0.4);
+  --color-accent: #2383E2;
+  --color-on-accent: #FFFFFF;
+  --color-important: #E03E3E;
+  --color-important-bg: rgba(224, 62, 62, 0.08);
+  --color-divider: rgba(0, 0, 0, 0.08);
+  --color-overlay: rgba(15, 15, 15, 0.4);
+  --shadow-float: 0 4px 16px rgba(15, 15, 15, 0.12);
+  --shadow-drag: 0 8px 24px rgba(15, 15, 15, 0.18);
+}
+
+/* ---------- 颜色：暗色，跟随系统 ---------- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #191919;
+    --color-bg-subtle: #222222;
+    --color-text: #E9E9E7;
+    --color-text-secondary: rgba(233, 233, 231, 0.6);
+    --color-text-tertiary: rgba(233, 233, 231, 0.4);
+    --color-accent: #4A9EE8;
+    --color-on-accent: #FFFFFF;
+    --color-important: #FF6B6B;
+    --color-important-bg: rgba(255, 107, 107, 0.12);
+    --color-divider: rgba(255, 255, 255, 0.1);
+    --color-overlay: rgba(0, 0, 0, 0.6);
+    --shadow-float: 0 4px 16px rgba(0, 0, 0, 0.5);
+    --shadow-drag: 0 8px 24px rgba(0, 0, 0, 0.6);
+  }
+}
