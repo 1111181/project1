@@ -188,6 +188,14 @@ select {
   background: var(--color-overlay);
 }
 
+/* 提示条出现时，把滚动区的内容整体下推一个提示条的高度，
+   这样它不会盖住分组标题行的 ⋯ / ＋。（高度由 js/app.js 量出来后写进变量）
+   这里**故意不加 transition**：加过一版，结果在无头浏览器里动画时间线不推进，
+   padding 一直停在 0，内容该让位却没让位。瞬间让位就够了。 */
+body.has-notice .scroll {
+  padding-top: var(--notice-height, 0px);
+}
+
 /* ---------- 分组 ---------- */
 
 .group-list {

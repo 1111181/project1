@@ -273,6 +273,37 @@ async function main() {
       names.length === 1 && names[0] === '未分组', `实际=${names.join(',')}`);
   }
 
+  // ---- B28 清空之后，界面的临时状态也要重置 ----
+  // 场景：全新用户折叠默认分组「未分组」→ 清空全部数据 →
+  // deleteGroup 补回来的正是同一个 id（g_default），于是新分组继承折叠状态，
+  // 用户看到的是一个收起来的空分组，像是坏了。
+  {
+    const doc2 = frame.contentDocument;
+    const $2 = (s) => doc2.querySelector(s);
+    const $$2 = (s) => [...doc2.querySelectorAll(s)];
+    const win2 = frame.contentWindow;
+    win2.confirm = () => true;
+    win2.prompt = () => null;
+
+    const collapsedBefore = $2('.group__caret')?.textContent;
+    $2('.group__toggle').click();
+    await sleep(150);
+    check('B28 先把默认分组折叠起来（前置条件）',
+      $2('.group__caret')?.textContent === '▸',
+      `折叠前 ${collapsedBefore}，折叠后 ${$2('.group__caret')?.textContent}`);
+
+    // 点开顶栏菜单，清空
+    $2('#menu-button').click();
+    await sleep(120);
+    $$2('.menu__item').find((n) => n.textContent === '清空全部数据')?.click();
+    await sleep(300);
+
+    check('B29 清空之后，重新补回的默认分组是展开的',
+      $2('.group__caret')?.textContent === '▾',
+      `实际箭头是 "${$2('.group__caret')?.textContent}"——`
+      + `若是 ▸，说明界面把新分组继承成了折叠态，用户会以为数据坏了`);
+  }
+
   lines.push('', fails === 0 ? '全部通过' : `有 ${fails} 项不通过`);
   out.textContent = lines.join('\n');
 }

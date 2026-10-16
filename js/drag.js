@@ -247,14 +247,4 @@ export function attachSortable(container, options) {
   window.addEventListener('touchmove', handleTouchMove, { passive: false });
   window.addEventListener('contextmenu', handleContextMenu);
   document.addEventListener('visibilitychange', handleVisibilityChange);
-
-  return function detach() {
-    container.removeEventListener('pointerdown', handlePointerDown);
-    window.removeEventListener('pointermove', handlePointerMove);
-    window.removeEventListener('pointerup', handlePointerUp);
-    window.removeEventListener('pointercancel', handlePointerCancel);
-    window.removeEventListener('touchmove', handleTouchMove);
-    window.removeEventListener('contextmenu', handleContextMenu);
-    document.removeEventListener('visibilitychange', handleVisibilityChange);
-  };
 }

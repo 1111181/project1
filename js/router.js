@@ -47,8 +47,5 @@ export function createRouter(onChange) {
     goToTask(taskId) {
       window.location.hash = taskHash(taskId);
     },
-    stop() {
-      window.removeEventListener('hashchange', handle);
-    },
   };
 }

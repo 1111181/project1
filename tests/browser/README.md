@@ -49,6 +49,7 @@ const hit = doc.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
 ## 已知的环境限制
 
 - **`requestAnimationFrame` 在无头截图模式下不回调**（`drag-probe` 第 0 项专门把这件事断言出来，它就是那条唯一显示为 ✗ 的项）。拖拽的落点计算靠 rAF 调度，所以 `drag-probe` 会用一个契约相同的替身（`setTimeout(cb, 0)`）顶上。**注意 `location.reload()` 之后新窗口没有替身，必须重装**，否则会得到一批假失败。
+- **CSS `transition` 也不推进**（同一个根因：没有新帧就没有动画时间线）。踩过一次：给「提示条出现时内容让位」的 `padding-top` 加了 180ms 过渡，结果在无头里 padding 一直停在 0，内容该让位却没让位——表现为 `quota-probe` 的 `Q6e` 稳定失败，而这条失败是**真的**（那个 padding 确实没生效）。所以：**凡是靠过渡到达的最终状态，在这里都测不到**，要么别加过渡，要么让步位是瞬时的。
 - **种数据必须在 iframe 首次加载之前**从父页面写（同源共享 `localStorage`）。用「先加载 iframe 再 `setItem` + `reload`」会被应用的 `pagehide` 兜底覆盖掉——那是应用的正确行为（离开页面前存盘），不是缺陷。
 - **真实的 `window.prompt` / `window.confirm` 在无头模式里会永久阻塞**，必须在任何点击之前替换掉。
 - **导出备份必须在探针里拦掉真实的下载**（`a.click()` 换掉），否则无头模式会一直等下载完成。

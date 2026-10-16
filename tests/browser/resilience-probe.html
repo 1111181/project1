@@ -263,6 +263,29 @@ async function main() {
       JSON.parse(win.localStorage.getItem('todo.v1')).tasks.length === 0);
   }
 
+  // ================= 部分分组的空状态（不能跟着整体空状态一起被省掉）=================
+  note('');
+  note('===== 空状态不能过度去重：只有「全空」才省掉每组的占位 =====');
+  {
+    const doc = await boot(JSON.stringify({
+      version: 1, savedAt: 1,
+      groups: [
+        { id: 'g1', name: '有任务的组', order: 0 },
+        { id: 'g2', name: '空组', order: 1 },
+      ],
+      tasks: [{ id: 't1', groupId: 'g1', title: '一条任务' }],
+    }));
+    const $ = (s) => doc.querySelector(s);
+    const $$ = (s) => [...doc.querySelectorAll(s)];
+
+    check('R24 有任务时不显示整体空状态', $$('.empty-state').length === 0,
+      `empty-state ${$$('.empty-state').length} 个`);
+    check('R25 但空着的那一组仍然显示「这个分组还没有任务」',
+      $$('.task-list__blank').length === 1
+      && $('.task-list__blank').textContent === '这个分组还没有任务',
+      `实际 ${$$('.task-list__blank').length} 个占位`);
+  }
+
   lines.push('', fails === 0 ? '全部通过' : `有 ${fails} 项不通过`);
   out.textContent = lines.join('\n');
 }

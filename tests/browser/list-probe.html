@@ -57,7 +57,10 @@ async function main() {
   check('A1 空状态文案出现', $('.empty-state__title')?.textContent === '还没有任务');
   check('A2 空状态引导文案出现', $('.empty-state__hint')?.textContent === '点下面的按钮加一个');
   check('A3 有一个分组「未分组」', $$('.group__name').map((n) => n.textContent).join('|') === '未分组');
-  check('A4 空分组有占位提示', $('.task-list__blank')?.textContent === '这个分组还没有任务');
+  check('A4 零任务时只出现一套空状态',
+    $$('.empty-state').length === 1 && $$('.task-list__blank').length === 0,
+    `整体空状态 ${$$('.empty-state').length} 个，每组占位 ${$$('.task-list__blank').length} 个`
+    + `（两个都在就是重复了：上面说「还没有任务」，下面每个分组又说一遍「这个分组还没有任务」）`);
 
   // ---- B/C/D/E 内联添加 ----
   $('#add-task-button').click();

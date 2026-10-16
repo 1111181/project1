@@ -17,7 +17,7 @@ function el(tag, className) {
 }
 
 /** '2026-10-20' -> '10-20'；不是今年的带上年份，避免误读。 */
-export function formatDue(due, today = new Date()) {
+function formatDue(due, today = new Date()) {
   const [year, month, day] = due.split('-');
   if (Number(year) === today.getFullYear()) {
     return `${Number(month)}-${Number(day)}`;
@@ -237,7 +237,12 @@ export function createListView({ root, actions }) {
 
   // ---------- 分组 ----------
 
-  function renderGroup(group) {
+  /**
+   * allEmpty 为真时不再画每组自己的空占位——整体空状态已经说过一次了，
+   * 再说 N 遍只是噪音。但**只有整体空**才省：某个分组空着而别的组有任务时，
+   * 那行提示仍然是唯一告诉用户「这里可以加东西」的信号。
+   */
+  function renderGroup(group, allEmpty) {
     const section = el('section', 'group');
     section.dataset.groupId = group.id;
 
@@ -351,7 +356,7 @@ export function createListView({ root, actions }) {
 
       for (const task of active) list.append(renderTask(task));
 
-      if (active.length === 0 && ui.addingGroupId !== group.id) {
+      if (active.length === 0 && ui.addingGroupId !== group.id && !allEmpty) {
         const blank = el('li', 'task-list__blank');
         blank.textContent = '这个分组还没有任务';
         list.append(blank);
@@ -389,7 +394,7 @@ export function createListView({ root, actions }) {
       const allEmpty = groups.every((g) => tasksInGroup(state, g.id).length === 0);
       if (allEmpty) root.append(renderEmptyState());
 
-      for (const group of groups) root.append(renderGroup(group));
+      for (const group of groups) root.append(renderGroup(group, allEmpty));
 
       if (ui.focusAdd && ui.addingGroupId) {
         ui.focusAdd = false;
@@ -458,5 +463,20 @@ export function createListView({ root, actions }) {
     },
   });
 
-  return { render, startAddInGroup };
+  /**
+   * 丢掉所有界面临时状态。
+   * 清空数据或导入之后必须调一次：这些状态是按分组 id 记的，
+   * 而「清空」补回来的默认分组 id 与原来那个可能相同，
+   * 不重置的话新分组会继承旧的折叠状态——用户看到一个收起来的空分组，像是坏了。
+   */
+  function resetUiState() {
+    ui.collapsed.clear();
+    ui.expandedDone.clear();
+    ui.addingGroupId = null;
+    ui.renamingGroupId = null;
+    ui.focusAdd = false;
+    ui.focusRename = false;
+  }
+
+  return { render, startAddInGroup, resetUiState };
 }

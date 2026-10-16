@@ -59,6 +59,8 @@ function hideNotice() {
   }
   notice.hidden = true;
   noticeText.textContent = '';
+  document.body.classList.remove('has-notice');
+  document.documentElement.style.setProperty('--notice-height', '0px');
 }
 
 function showNotice(text) {
@@ -68,6 +70,12 @@ function showNotice(text) {
   }
   noticeText.textContent = text;
   notice.hidden = false;
+
+  // 让下面的内容让开同样多的高度。
+  // 不让的话提示条会盖住分组标题行的 ⋯ 和 ＋——而那正是用户看到提示后想去点的地方。
+  document.body.classList.add('has-notice');
+  document.documentElement.style.setProperty('--notice-height', `${notice.offsetHeight}px`);
+
   if (noticeTimer) clearTimeout(noticeTimer);
   noticeTimer = setTimeout(hideNotice, 6000);
 }
@@ -295,8 +303,9 @@ async function importBackup(file) {
   if (!window.confirm(lines.join('\n'))) return;
 
   state = result.state;
+  // 导入换了整套数据，界面的折叠状态等临时状态要跟着丢掉
+  listView.resetUiState();
   flushSave();
-  if (!viewList.hidden) listView.render(state);
   router.goToList();
   listView.render(state);
   showNotice('导入完成。');
@@ -308,6 +317,8 @@ function clearEverything() {
 
   storage.clear();
   state = createInitialState();
+  // 补回来的默认分组 id 与原来那个一样，不重置的话它会继承折叠状态
+  listView.resetUiState();
   flushSave();
   router.goToList();
   listView.render(state);
