@@ -184,3 +184,72 @@ export function toggleTaskImportant(state, taskId) {
   if (!task) return state;
   return updateTask(state, taskId, { important: !task.important });
 }
+
+// ---------- 分组 ----------
+
+/** 把分组按现有顺序重新编号为 0..n-1。 */
+function renumberGroups(state) {
+  const ordered = sortedGroups(state);
+  const orderById = new Map(ordered.map((g, i) => [g.id, i]));
+  return {
+    ...state,
+    groups: state.groups.map((g) => ({ ...g, order: orderById.get(g.id) })),
+  };
+}
+
+export function addGroup(state, { id, name }) {
+  const order = state.groups.length === 0
+    ? 0
+    : Math.max(...state.groups.map((g) => g.order)) + 1;
+  return { ...state, groups: [...state.groups, { id, name, order }] };
+}
+
+export function renameGroup(state, groupId, name) {
+  if (!getGroup(state, groupId)) return state;
+  return {
+    ...state,
+    groups: state.groups.map((g) => (g.id === groupId ? { ...g, name } : g)),
+  };
+}
+
+/**
+ * 删除分组，连带删除组内任务。
+ * 删掉最后一个分组时自动补一个默认分组——否则界面没有容器可放任务。
+ */
+export function deleteGroup(state, groupId) {
+  if (!getGroup(state, groupId)) return state;
+
+  let next = {
+    ...state,
+    groups: state.groups.filter((g) => g.id !== groupId),
+    tasks: state.tasks.filter((t) => t.groupId !== groupId),
+  };
+
+  if (next.groups.length === 0) {
+    next = {
+      ...next,
+      groups: [{ id: 'g_default', name: DEFAULT_GROUP_NAME, order: 0 }],
+    };
+  }
+
+  return renumberGroups(next);
+}
+
+export function moveGroup(state, groupId, toIndex) {
+  const ordered = sortedGroups(state);
+  const from = ordered.findIndex((g) => g.id === groupId);
+  if (from === -1) return state;
+
+  const to = Math.max(0, Math.min(toIndex, ordered.length - 1));
+  if (from === to) return state;
+
+  const reordered = ordered.slice();
+  const [moved] = reordered.splice(from, 1);
+  reordered.splice(to, 0, moved);
+
+  const orderById = new Map(reordered.map((g, i) => [g.id, i]));
+  return {
+    ...state,
+    groups: state.groups.map((g) => ({ ...g, order: orderById.get(g.id) })),
+  };
+}

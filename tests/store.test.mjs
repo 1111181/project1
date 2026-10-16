@@ -18,6 +18,10 @@ import {
   deleteTask,
   toggleTaskDone,
   toggleTaskImportant,
+  addGroup,
+  renameGroup,
+  deleteGroup,
+  moveGroup,
 } from '../js/store.js';
 
 // ---- 测试夹具：手工构造合法 state，不依赖任何写入函数 ----
@@ -272,4 +276,100 @@ test('toggleTaskImportant 来回切换，且不影响其他字段', () => {
 
   s = toggleTaskImportant(s, 't_a');
   assert.equal(getTask(s, 't_a').important, false);
+});
+
+// ---- Task 3 的测试 ----
+
+test('addGroup 追加到分组列表末尾并给出正确的 order', () => {
+  let s = createInitialState();
+  s = addGroup(s, { id: 'g2', name: '工作' });
+  s = addGroup(s, { id: 'g3', name: '生活' });
+
+  assert.deepEqual(sortedGroups(s).map((g) => g.name), [DEFAULT_GROUP_NAME, '工作', '生活']);
+  assert.deepEqual(sortedGroups(s).map((g) => g.order), [0, 1, 2]);
+});
+
+test('renameGroup 只改名字', () => {
+  let s = createInitialState();
+  const g = s.groups[0].id;
+  s = renameGroup(s, g, '家里的事');
+
+  assert.equal(getGroup(s, g).name, '家里的事');
+  assert.equal(getGroup(s, g).order, 0);
+});
+
+test('renameGroup 允许改成空串（界面决定怎么显示占位）', () => {
+  let s = createInitialState();
+  const g = s.groups[0].id;
+  s = renameGroup(s, g, '');
+  assert.equal(getGroup(s, g).name, '');
+});
+
+test('renameGroup 遇到不存在的分组时原样返回', () => {
+  const s = createInitialState();
+  assert.equal(renameGroup(s, 'nope', 'X'), s);
+});
+
+test('deleteGroup 连带删除组内任务，其他分组的任务不动', () => {
+  const s = fixture();
+  const after = deleteGroup(s, 'g1');
+
+  assert.equal(getGroup(after, 'g1'), null);
+  assert.deepEqual(after.tasks.map((t) => t.id), ['t3'], 'g1 下的 t1/t2/t4 应一并删除');
+  assert.deepEqual(tasksInGroup(after, 'g2').map((t) => t.id), ['t3']);
+  assert.deepEqual(tasksInGroup(after, 'g2').map((t) => t.order), [0], 'order 应压紧');
+});
+
+test('deleteGroup 删掉最后一个分组时自动补一个默认分组', () => {
+  let s = createInitialState();
+  const only = s.groups[0].id;
+  s = deleteGroup(s, only);
+
+  assert.equal(s.groups.length, 1);
+  assert.equal(s.groups[0].name, DEFAULT_GROUP_NAME);
+  assert.equal(s.groups[0].order, 0);
+  assert.deepEqual(s.tasks, []);
+});
+
+test('deleteGroup 之后分组 order 连续', () => {
+  let s = createInitialState();
+  s = addGroup(s, { id: 'g2', name: '工作' });
+  s = addGroup(s, { id: 'g3', name: '生活' });
+  s = deleteGroup(s, 'g2');
+
+  assert.deepEqual(sortedGroups(s).map((g) => g.order), [0, 1]);
+  assert.deepEqual(sortedGroups(s).map((g) => g.name), [DEFAULT_GROUP_NAME, '生活']);
+});
+
+test('deleteGroup 遇到不存在的分组时原样返回', () => {
+  const s = fixture();
+  assert.equal(deleteGroup(s, 'nope'), s);
+});
+
+test('moveGroup 把分组移到指定位置并重排 order', () => {
+  let s = createInitialState();
+  s = addGroup(s, { id: 'g2', name: '工作' });
+  s = addGroup(s, { id: 'g3', name: '生活' });
+  const first = s.groups[0].id; // g_default
+
+  s = moveGroup(s, 'g3', 0);
+  assert.deepEqual(sortedGroups(s).map((g) => g.id), ['g3', 'g_default', 'g2']);
+  assert.deepEqual(sortedGroups(s).map((g) => g.order), [0, 1, 2]);
+  assert.equal(first, 'g_default');
+});
+
+test('moveGroup 目标位置越界时收敛到边界，位置不变时原样返回', () => {
+  let s = createInitialState();
+  s = addGroup(s, { id: 'g2', name: '工作' });
+
+  const same = moveGroup(s, s.groups[0].id, 0);
+  assert.equal(same, s, '位置没变应原样返回');
+
+  const clamped = moveGroup(s, s.groups[0].id, 99);
+  assert.deepEqual(sortedGroups(clamped).map((g) => g.id), ['g2', 'g_default']);
+});
+
+test('moveGroup 遇到不存在的分组时原样返回', () => {
+  const s = fixture();
+  assert.equal(moveGroup(s, 'nope', 0), s);
 });
