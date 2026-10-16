@@ -1,6 +1,7 @@
 // 入口：装载数据、装配路由与视图、统一处理写盘。
 
-import { createStorage } from './storage.js';
+import { createStorage, toPayload } from './storage.js';
+import { createPopupMenu } from './menu.js';
 import { createRouter, ROUTE_TASK } from './router.js';
 import { createListView } from './list-view.js';
 import { createDetailView } from './detail-view.js';
@@ -20,6 +21,9 @@ import {
   addSubtask,
   updateSubtask,
   deleteSubtask,
+  validateImport,
+  createInitialState,
+  addGroup,
 } from './store.js';
 
 const notice = document.getElementById('notice');
@@ -186,6 +190,123 @@ detailBack.addEventListener('click', () => router.goToList());
 addTaskButton.addEventListener('click', () => {
   const groups = sortedGroups(state);
   if (groups.length > 0) listView.startAddInGroup(groups[0].id);
+});
+
+// ---------- 顶栏菜单：新建分组 / 导出 / 导入 / 清空 ----------
+
+const menuButton = document.getElementById('menu-button');
+const importInput = document.getElementById('import-input');
+const topMenu = createPopupMenu();
+
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+function createGroup() {
+  const name = window.prompt('新分组叫什么？');
+  if (name === null) return;
+
+  const trimmed = name.trim();
+  apply(addGroup(state, { id: newId('g'), name: trimmed }), true);
+}
+
+function exportBackup() {
+  const text = JSON.stringify(toPayload(state), null, 2);
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+
+  const today = new Date();
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `todo-backup-${today.getFullYear()}-`
+    + `${pad2(today.getMonth() + 1)}-${pad2(today.getDate())}.json`;
+
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+  showNotice('备份已导出。');
+}
+
+async function importBackup(file) {
+  let text;
+  try {
+    text = await file.text();
+  } catch {
+    showNotice('读不到这个文件，换一个试试。');
+    return;
+  }
+
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    showNotice('这个文件不是合法的 JSON，可能选错了文件。');
+    return;
+  }
+
+  const result = validateImport(data);
+  if (!result.ok) {
+    showNotice(`导入失败：${result.reason}`);
+    return;
+  }
+
+  const lines = [
+    '导入会覆盖当前全部数据，现在的任务和分组都会被替换掉。',
+    '',
+    `导入后有 ${result.state.groups.length} 个分组、${result.state.tasks.length} 个任务。`,
+  ];
+  if (result.repaired.length > 0) {
+    lines.push(
+      '',
+      `有 ${result.repaired.length} 处自动修复：`,
+      ...result.repaired.map((note) => `· ${note}`),
+    );
+  }
+  lines.push('', '确定继续吗？');
+
+  if (!window.confirm(lines.join('\n'))) return;
+
+  state = result.state;
+  flushSave();
+  if (!viewList.hidden) listView.render(state);
+  router.goToList();
+  listView.render(state);
+  showNotice('导入完成。');
+}
+
+function clearEverything() {
+  if (!window.confirm('这会删掉全部任务和分组，没法撤销。\n\n确定吗？')) return;
+  if (!window.confirm('真的确定吗？建议先导出备份。')) return;
+
+  storage.clear();
+  state = createInitialState();
+  flushSave();
+  router.goToList();
+  listView.render(state);
+  showNotice('已清空。');
+}
+
+menuButton.addEventListener('click', (event) => {
+  event.stopPropagation();
+  menuButton.setAttribute('aria-expanded', 'true');
+  topMenu.show(
+    menuButton,
+    [
+      { label: '新建分组', run: createGroup },
+      { label: '导出备份', run: exportBackup },
+      { label: '导入备份', run: () => importInput.click() },
+      { label: '清空全部数据', danger: true, run: clearEverything },
+    ],
+    () => menuButton.setAttribute('aria-expanded', 'false'),
+  );
+});
+
+importInput.addEventListener('change', () => {
+  const file = importInput.files?.[0];
+  importInput.value = ''; // 清掉，方便连续导入同一个文件
+  if (file) importBackup(file);
 });
 
 // 三重兜底：控件的 blur、切走页面、窗口失焦，都要把没写完的字落盘

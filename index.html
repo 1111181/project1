@@ -21,6 +21,10 @@
   <!-- 存储不可用、数据损坏等情况的提示条 -->
   <div id="notice" class="notice" role="status" hidden></div>
 
+  <!-- 导入备份用的文件选择框，平时不可见 -->
+  <input id="import-input" class="visually-hidden" type="file"
+         accept="application/json,.json" aria-label="选择备份文件" />
+
   <!-- 列表视图 -->
   <main id="view-list" class="view">
     <header class="topbar">

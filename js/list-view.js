@@ -8,6 +8,7 @@ import {
   subtaskProgress,
 } from './store.js';
 import { attachSortable } from './drag.js';
+import { createPopupMenu } from './menu.js';
 
 function el(tag, className) {
   const node = document.createElement(tag);
@@ -38,58 +39,10 @@ export function createListView({ root, actions }) {
   };
 
   let state = null;
-  let openMenu = null;
   let painting = false;
 
-  // ---------- 弹出菜单 ----------
-
-  function closeMenu() {
-    if (openMenu) {
-      openMenu.remove();
-      openMenu = null;
-    }
-  }
-
-  document.addEventListener('click', closeMenu);
-
-  function showMenu(anchor, items) {
-    closeMenu();
-
-    const menu = el('div', 'menu');
-    menu.setAttribute('role', 'menu');
-
-    for (const item of items) {
-      const button = el('button', 'menu__item');
-      button.type = 'button';
-      if (item.danger) button.classList.add('menu__item--danger');
-      button.textContent = item.label;
-      button.addEventListener('click', () => {
-        closeMenu();
-        item.run();
-      });
-      menu.append(button);
-    }
-
-    document.body.append(menu);
-
-    // 贴住锚点右下角，并保证不超出视口
-    const rect = anchor.getBoundingClientRect();
-    const width = menu.offsetWidth;
-    const height = menu.offsetHeight;
-    const left = Math.min(
-      Math.max(8, rect.right - width),
-      Math.max(8, window.innerWidth - width - 8),
-    );
-    const below = rect.bottom + 4;
-    const top = below + height > window.innerHeight - 8
-      ? Math.max(8, rect.top - height - 4)
-      : below;
-
-    menu.style.left = `${left}px`;
-    menu.style.top = `${top}px`;
-
-    openMenu = menu;
-  }
+  // 分组标题的 ⋯ 与顶栏的 ⋯ 共用同一个菜单模块
+  const menu = createPopupMenu();
 
   // ---------- 空状态 ----------
 
@@ -361,7 +314,7 @@ export function createListView({ root, actions }) {
       more.setAttribute('aria-label', `「${group.name}」的更多操作`);
       more.addEventListener('click', (event) => {
         event.stopPropagation();
-        showMenu(more, [
+        menu.show(more, [
           {
             label: '重命名分组',
             run: () => {
@@ -478,7 +431,7 @@ export function createListView({ root, actions }) {
     draggingClass: 'task--dragging',
     scrollEl: root.closest('.scroll') ?? root,
     containerOf: (node) => node.closest('.task-list[data-group-id]'),
-    onStart: () => { ui.dragging = true; closeMenu(); },
+    onStart: () => { ui.dragging = true; menu.close(); },
     onEnd: () => { ui.dragging = false; },
     onDrop: (item, target) => {
       actions.moveTask(
@@ -497,7 +450,7 @@ export function createListView({ root, actions }) {
     draggingClass: 'group--dragging',
     scrollEl: root.closest('.scroll') ?? root,
     containerOf: (node) => node.closest('.group-list'),
-    onStart: () => { ui.dragging = true; closeMenu(); },
+    onStart: () => { ui.dragging = true; menu.close(); },
     onEnd: () => { ui.dragging = false; },
     onDrop: (item) => {
       const index = [...root.querySelectorAll('.group')].indexOf(item);

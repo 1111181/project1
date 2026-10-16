@@ -701,6 +701,19 @@ select {
   background: var(--color-important-bg);
 }
 
+/* 视觉上隐藏，但仍能被脚本点击、仍对读屏软件可见 */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ---------- 无障碍：尊重系统的减少动效设置 ---------- */
 
 @media (prefers-reduced-motion: reduce) {
