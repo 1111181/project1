@@ -13,6 +13,8 @@ import {
   toggleTaskDone,
   renameGroup,
   deleteGroup,
+  moveTask,
+  moveGroup,
 } from './store.js';
 
 const notice = document.getElementById('notice');
@@ -73,6 +75,12 @@ const listView = createListView({
     },
     renameGroup: (groupId, name) => commit(renameGroup(state, groupId, name)),
     deleteGroup: (groupId) => commit(deleteGroup(state, groupId)),
+    moveTask: (taskId, groupId, index) => {
+      commit(moveTask(state, taskId, groupId, index));
+    },
+    moveGroup: (groupId, index) => {
+      commit(moveGroup(state, groupId, index));
+    },
   },
 });
 

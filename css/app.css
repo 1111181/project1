@@ -435,6 +435,38 @@ select {
   color: var(--color-important);
 }
 
+/* ---------- 拖拽 ---------- */
+
+/* touch-action 用 manipulation 而不是 none：
+   任务行铺满整屏，设成 none 会让列表彻底滑不动。
+   拖拽开始后由 js/drag.js 在 touchmove 里 preventDefault 阻止滚动。 */
+.task,
+.group__header {
+  touch-action: manipulation;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+.drag-placeholder {
+  background: var(--color-bg-subtle);
+  border: 1px dashed var(--color-divider);
+  border-radius: var(--radius-card);
+}
+
+.task--dragging,
+.group--dragging {
+  z-index: 100;
+  pointer-events: none;
+  background: var(--color-bg);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-drag);
+}
+
+/* 重要任务拖动时保持红底，别在手里突然变成白的 */
+.task--dragging.task--important {
+  background: var(--color-important-bg);
+}
+
 /* ---------- 无障碍：尊重系统的减少动效设置 ---------- */
 
 @media (prefers-reduced-motion: reduce) {

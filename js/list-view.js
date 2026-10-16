@@ -7,6 +7,7 @@ import {
   tasksInGroup,
   subtaskProgress,
 } from './store.js';
+import { attachSortable } from './drag.js';
 
 function el(tag, className) {
   const node = document.createElement(tag);
@@ -33,6 +34,7 @@ export function createListView({ root, actions }) {
     focusAdd: false,
     focusRename: false,
     closingAdd: false,
+    dragging: false,
   };
 
   let state = null;
@@ -423,7 +425,8 @@ export function createListView({ root, actions }) {
 
   function render(next) {
     if (next) state = next;
-    if (!state || painting) return;
+    // 拖拽过程中绝不重画，否则正在拖的那个元素会被换掉
+    if (!state || painting || ui.dragging) return;
 
     painting = true;
     try {
@@ -467,6 +470,40 @@ export function createListView({ root, actions }) {
     const input = root.querySelector('.add-row__input');
     if (input) input.scrollIntoView({ block: 'center' });
   }
+
+  // ---------- 拖拽 ----------
+  // 任务：可以在分组之间移动，所以 containerOf 返回指针下面的那个 task-list
+  attachSortable(root, {
+    itemSelector: '.task',
+    draggingClass: 'task--dragging',
+    scrollEl: root.closest('.scroll') ?? root,
+    containerOf: (node) => node.closest('.task-list[data-group-id]'),
+    onStart: () => { ui.dragging = true; closeMenu(); },
+    onEnd: () => { ui.dragging = false; },
+    onDrop: (item, target) => {
+      actions.moveTask(
+        item.dataset.taskId,
+        target.listEl.dataset.groupId,
+        target.index,
+      );
+    },
+  });
+
+  // 分组：整个 group-list 就是一个列表；只有按在标题行上才算（按在任务行上不该拖分组）
+  attachSortable(root, {
+    itemSelector: '.group',
+    handleSelector: '.group__header',
+    ignoreSelector: 'input, textarea, select, a, label, .group__more, .group__add',
+    draggingClass: 'group--dragging',
+    scrollEl: root.closest('.scroll') ?? root,
+    containerOf: (node) => node.closest('.group-list'),
+    onStart: () => { ui.dragging = true; closeMenu(); },
+    onEnd: () => { ui.dragging = false; },
+    onDrop: (item) => {
+      const index = [...root.querySelectorAll('.group')].indexOf(item);
+      actions.moveGroup(item.dataset.groupId, index);
+    },
+  });
 
   return { render, startAddInGroup };
 }
