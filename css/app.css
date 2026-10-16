@@ -467,6 +467,240 @@ select {
   background: var(--color-important-bg);
 }
 
+/* ---------- 详情视图 ---------- */
+
+.view--detail {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: var(--color-bg);
+}
+
+.detail {
+  padding: var(--space-2) var(--space-4) var(--space-6);
+}
+
+.detail__title {
+  width: 100%;
+  padding: var(--space-2) 0;
+  font-size: var(--font-title);
+  font-weight: var(--weight-semibold);
+  background: none;
+  border: 0;
+  outline: none;
+}
+
+.detail__title::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.detail__toggles {
+  display: flex;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 var(--space-5);
+}
+
+.toggle {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-height: var(--tap-min);
+  padding: 0 var(--space-4);
+  font-size: var(--font-meta);
+  color: var(--color-text-secondary);
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-pill);
+}
+
+.toggle__dot {
+  width: 10px;
+  height: 10px;
+  background: var(--color-text-tertiary);
+  border-radius: 50%;
+}
+
+.toggle--on {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.toggle--on .toggle__dot {
+  background: var(--color-accent);
+}
+
+.toggle--important.toggle--on {
+  color: var(--color-important);
+  border-color: var(--color-important);
+}
+
+.toggle--important.toggle--on .toggle__dot {
+  background: var(--color-important);
+}
+
+.field {
+  margin-bottom: var(--space-5);
+}
+
+.field__label {
+  display: block;
+  margin-bottom: var(--space-2);
+  font-size: var(--font-meta);
+  color: var(--color-text-tertiary);
+}
+
+.field__row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.field__input,
+.field__textarea {
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-subtle);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-button);
+}
+
+.field__input:focus,
+.field__textarea:focus {
+  border-color: var(--color-accent);
+  outline: none;
+}
+
+.field__textarea {
+  min-height: 88px;
+  overflow: hidden;
+  line-height: 1.5;
+  resize: none;
+}
+
+.field__clear {
+  flex: 0 0 auto;
+  min-height: var(--tap-min);
+  padding: 0 var(--space-3);
+  font-size: var(--font-meta);
+  color: var(--color-text-secondary);
+}
+
+.subtask-list {
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+
+.subtask {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  min-height: var(--tap-min);
+}
+
+.subtask__check {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap-min);
+  height: var(--tap-min);
+}
+
+.subtask__check::before {
+  content: '';
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--color-text-tertiary);
+  border-radius: 50%;
+}
+
+.subtask__check--on::before {
+  background: var(--color-text-tertiary);
+  border-color: var(--color-text-tertiary);
+}
+
+.subtask__tick {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--color-bg);
+  transform: translate(-50%, -50%);
+}
+
+.subtask__text {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 var(--space-2);
+  background: none;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  outline: none;
+}
+
+.subtask__text:focus {
+  border-bottom-color: var(--color-accent);
+}
+
+.subtask--done .subtask__text {
+  color: var(--color-text-tertiary);
+  text-decoration: line-through;
+}
+
+.subtask-add__input {
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: 0 var(--space-3);
+  background: var(--color-bg-subtle);
+  border: 1px dashed var(--color-divider);
+  border-radius: var(--radius-button);
+}
+
+.subtask-add__input:focus {
+  border-color: var(--color-accent);
+  outline: none;
+}
+
+.detail__meta {
+  margin: 0 0 var(--space-5);
+  padding-top: var(--space-4);
+  font-size: var(--font-meta);
+  color: var(--color-text-tertiary);
+  border-top: 1px solid var(--color-divider);
+}
+
+.detail__meta-row {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.detail__meta-key {
+  flex: 0 0 56px;
+}
+
+.detail__meta-value {
+  margin: 0;
+}
+
+.detail__delete {
+  display: block;
+  width: 100%;
+  min-height: var(--tap-min);
+  font-size: var(--font-task);
+  color: var(--color-important);
+  border-radius: var(--radius-button);
+}
+
+.detail__delete:active {
+  background: var(--color-important-bg);
+}
+
 /* ---------- 无障碍：尊重系统的减少动效设置 ---------- */
 
 @media (prefers-reduced-motion: reduce) {
