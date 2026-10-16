@@ -338,3 +338,187 @@ export function deleteSubtask(state, taskId, subtaskId) {
     subtasks: t.subtasks.filter((s) => s.id !== subtaskId),
   }));
 }
+
+// ---------- 校验、导入、存储内容解析 ----------
+
+function isPlainObject(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const DUE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * 把任意值规范化成合法 State。
+ * 返回 { ok: true, state, repaired } 或 { ok: false, reason }。
+ *
+ * 结构性错误一律拒绝；可安全修复的（分组对不上、字段类型不对、
+ * order 有空洞、done 与 completedAt 不同步）就地修复并记进 repaired。
+ */
+export function normalizeState(data) {
+  if (!isPlainObject(data)) return { ok: false, reason: '数据不是一个对象' };
+  if (typeof data.version !== 'number') return { ok: false, reason: '缺少 version 字段' };
+  if (!Array.isArray(data.groups)) return { ok: false, reason: 'groups 不是数组' };
+  if (!Array.isArray(data.tasks)) return { ok: false, reason: 'tasks 不是数组' };
+
+  const repaired = [];
+
+  // --- 分组 ---
+  const groups = [];
+  const groupIds = new Set();
+  for (const raw of data.groups) {
+    if (!isPlainObject(raw)) return { ok: false, reason: 'groups 里有不是对象的东西' };
+    if (typeof raw.id !== 'string' || raw.id === '') {
+      return { ok: false, reason: '有分组缺少 id' };
+    }
+    if (groupIds.has(raw.id)) return { ok: false, reason: `分组 id 重复：${raw.id}` };
+    groupIds.add(raw.id);
+    groups.push({
+      id: raw.id,
+      name: typeof raw.name === 'string' ? raw.name : DEFAULT_GROUP_NAME,
+      order: Number.isFinite(raw.order) ? raw.order : groups.length,
+    });
+  }
+
+  if (groups.length === 0) {
+    groups.push({ id: 'g_default', name: DEFAULT_GROUP_NAME, order: 0 });
+    groupIds.add('g_default');
+    repaired.push('一个分组都没有，已补上默认分组');
+  }
+
+  // groupId 对不上时的落点：优先已存在的「未分组」，否则 order 最小的分组。
+  // 不因为导入而凭空新建分组——那比把任务放进第一个分组更让人意外。
+  const orderedGroups = [...groups].sort(
+    (a, b) => a.order - b.order || a.id.localeCompare(b.id),
+  );
+  const fallbackGroupId = (
+    orderedGroups.find((g) => g.name === DEFAULT_GROUP_NAME) ?? orderedGroups[0]
+  ).id;
+
+  // --- 任务 ---
+  const tasks = [];
+  const taskIds = new Set();
+  for (const raw of data.tasks) {
+    if (!isPlainObject(raw)) return { ok: false, reason: 'tasks 里有不是对象的东西' };
+    if (typeof raw.id !== 'string' || raw.id === '') {
+      return { ok: false, reason: '有任务缺少 id' };
+    }
+    if (taskIds.has(raw.id)) return { ok: false, reason: `任务 id 重复：${raw.id}` };
+    if (typeof raw.title !== 'string') {
+      return { ok: false, reason: `任务 ${raw.id} 缺少标题` };
+    }
+    if (raw.subtasks !== undefined && !Array.isArray(raw.subtasks)) {
+      return { ok: false, reason: `任务 ${raw.id} 的 subtasks 不是数组` };
+    }
+    taskIds.add(raw.id);
+
+    let groupId = raw.groupId;
+    if (!groupIds.has(groupId)) {
+      groupId = fallbackGroupId;
+      repaired.push(`任务「${raw.title}」的分组不存在，已改归到别的分组`);
+    }
+
+    const subtasks = [];
+    for (const sub of Array.isArray(raw.subtasks) ? raw.subtasks : []) {
+      if (!isPlainObject(sub)) continue;
+      if (typeof sub.id !== 'string' || typeof sub.text !== 'string') continue;
+      subtasks.push({ id: sub.id, text: sub.text, done: Boolean(sub.done) });
+    }
+
+    const createdAt = Number.isFinite(raw.createdAt) ? raw.createdAt : 0;
+    const done = Boolean(raw.done);
+
+    tasks.push({
+      id: raw.id,
+      groupId,
+      title: raw.title,
+      note: typeof raw.note === 'string' ? raw.note : '',
+      done,
+      important: Boolean(raw.important),
+      due: typeof raw.due === 'string' && DUE_RE.test(raw.due) ? raw.due : null,
+      subtasks,
+      createdAt,
+      // 补 createdAt 而不是 0：0 会显示成 1970 年
+      completedAt: done
+        ? (Number.isFinite(raw.completedAt) ? raw.completedAt : createdAt)
+        : null,
+      order: Number.isFinite(raw.order) ? raw.order : 0,
+    });
+  }
+
+  // --- 压紧 order ---
+  let state = { version: SCHEMA_VERSION, groups, tasks };
+  for (const g of groups) state = renumberGroup(state, g.id);
+  state = renumberGroups(state);
+
+  return { ok: true, state, repaired };
+}
+
+/**
+ * 校验一份待导入的备份。
+ * 结构性错误一律拒绝，不改动现有数据。允许规范化时给出 repaired 供界面提示。
+ */
+export function validateImport(data) {
+  if (!isPlainObject(data)) {
+    return { ok: false, reason: '文件内容不是一个 JSON 对象，可能选错了文件。' };
+  }
+  if (typeof data.version !== 'number') {
+    return { ok: false, reason: '文件里没有 version 字段，可能不是本应用导出的备份。' };
+  }
+  if (data.version > SCHEMA_VERSION) {
+    return {
+      ok: false,
+      reason: `备份来自更新的版本（v${data.version}），当前应用只支持到 v${SCHEMA_VERSION}。`,
+    };
+  }
+
+  const result = normalizeState(data);
+  if (!result.ok) return { ok: false, reason: result.reason };
+  return { ok: true, state: result.state, repaired: result.repaired };
+}
+
+/**
+ * 把 localStorage 里的原始字符串解析成 state。
+ * 返回 { state, status, warning, readonly }：
+ *   status: 'empty' | 'ok' | 'migrated' | 'corrupt' | 'readonly'
+ * readonly 为 true 时界面应进入只读，不要写回，避免把新版数据写坏。
+ */
+export function parseStored(rawString) {
+  if (rawString === null || rawString === undefined || rawString === '') {
+    return { state: createInitialState(), status: 'empty', warning: null, readonly: false };
+  }
+
+  let data;
+  try {
+    data = JSON.parse(rawString);
+  } catch {
+    return {
+      state: createInitialState(),
+      status: 'corrupt',
+      warning: '本地数据无法解析，原始内容已备份，现在从空列表开始。',
+      readonly: false,
+    };
+  }
+
+  if (isPlainObject(data) && typeof data.version === 'number' && data.version > SCHEMA_VERSION) {
+    const relaxed = normalizeState({ ...data, version: SCHEMA_VERSION });
+    return {
+      state: relaxed.ok ? relaxed.state : createInitialState(),
+      status: 'readonly',
+      warning: '本地数据来自更新版本的应用。为避免写坏，现在处于只读状态，改动不会被保存。',
+      readonly: true,
+    };
+  }
+
+  const result = normalizeState(data);
+  if (!result.ok) {
+    return {
+      state: createInitialState(),
+      status: 'corrupt',
+      warning: `本地数据结构异常（${result.reason}），原始内容已备份，现在从空列表开始。`,
+      readonly: false,
+    };
+  }
+
+  const status = data.version < SCHEMA_VERSION ? 'migrated' : 'ok';
+  return { state: result.state, status, warning: null, readonly: false };
+}

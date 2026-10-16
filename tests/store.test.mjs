@@ -26,6 +26,9 @@ import {
   addSubtask,
   updateSubtask,
   deleteSubtask,
+  normalizeState,
+  validateImport,
+  parseStored,
 } from '../js/store.js';
 
 // ---- 测试夹具：手工构造合法 state，不依赖任何写入函数 ----
@@ -567,4 +570,202 @@ test('删除任务时子任务随之消失', () => {
   s = addSubtask(s, 't_a', { id: 's1', text: 'a' });
   s = deleteTask(s, 't_a');
   assert.deepEqual(s.tasks, []);
+});
+
+// ---- Task 6 的测试 ----
+
+// 一个结构完全合法、可以直接喂给 normalizeState 的原始数据
+function rawPayload(over = {}) {
+  return {
+    version: SCHEMA_VERSION,
+    savedAt: 123,
+    groups: [{ id: 'g1', name: '工作', order: 0 }],
+    tasks: [
+      {
+        id: 't1', groupId: 'g1', title: '写周报', note: '', done: false,
+        important: false, due: null, subtasks: [], createdAt: 100,
+        completedAt: null, order: 0,
+      },
+    ],
+    ...over,
+  };
+}
+
+test('normalizeState 拒绝非对象、缺 version、groups/tasks 不是数组', () => {
+  assert.equal(normalizeState(null).ok, false);
+  assert.equal(normalizeState('字符串').ok, false);
+  assert.equal(normalizeState([]).ok, false);
+  assert.equal(normalizeState({ groups: [], tasks: [] }).ok, false, '缺 version 应被拒绝');
+  assert.equal(normalizeState({ version: 1, groups: {}, tasks: [] }).ok, false);
+  assert.equal(normalizeState({ version: 1, groups: [], tasks: {} }).ok, false);
+});
+
+test('normalizeState 拒绝重复 id，且理由里带上那个 id', () => {
+  const dupGroup = rawPayload({
+    groups: [{ id: 'g1', name: 'A', order: 0 }, { id: 'g1', name: 'B', order: 1 }],
+  });
+  const r1 = normalizeState(dupGroup);
+  assert.equal(r1.ok, false);
+  assert.match(r1.reason, /g1/);
+
+  const dupTask = rawPayload({
+    tasks: [
+      { id: 't1', groupId: 'g1', title: 'A' },
+      { id: 't1', groupId: 'g1', title: 'B' },
+    ],
+  });
+  const r2 = normalizeState(dupTask);
+  assert.equal(r2.ok, false);
+  assert.match(r2.reason, /t1/);
+});
+
+test('normalizeState 拒绝没有标题的任务', () => {
+  const r = normalizeState(rawPayload({ tasks: [{ id: 't1', groupId: 'g1' }] }));
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /标题/);
+});
+
+test('normalizeState 把 groupId 对不上的任务归入已有分组并记录修复', () => {
+  const r = normalizeState(rawPayload({
+    groups: [{ id: 'g1', name: '工作', order: 0 }, { id: 'g2', name: '生活', order: 1 }],
+    tasks: [{ id: 't1', groupId: 'g_gone', title: '孤儿任务' }],
+  }));
+
+  assert.equal(r.ok, true);
+  assert.equal(r.state.tasks[0].groupId, 'g1', '应归入 order 最小的分组');
+  assert.equal(r.repaired.length, 1);
+  assert.match(r.repaired[0], /孤儿任务/);
+});
+
+test('normalizeState 优先归入名为「未分组」的分组', () => {
+  const r = normalizeState(rawPayload({
+    groups: [
+      { id: 'g1', name: '工作', order: 0 },
+      { id: 'g9', name: DEFAULT_GROUP_NAME, order: 1 },
+    ],
+    tasks: [{ id: 't1', groupId: 'g_gone', title: 'X' }],
+  }));
+  assert.equal(r.state.tasks[0].groupId, 'g9');
+});
+
+test('normalizeState 在没有任何分组时补一个默认分组', () => {
+  const r = normalizeState(rawPayload({ groups: [], tasks: [] }));
+  assert.equal(r.ok, true);
+  assert.equal(r.state.groups.length, 1);
+  assert.equal(r.state.groups[0].name, DEFAULT_GROUP_NAME);
+  assert.equal(r.repaired.length, 1);
+});
+
+test('normalizeState 修复字段类型、非法 due、以及 order 空洞', () => {
+  const r = normalizeState(rawPayload({
+    tasks: [
+      { id: 't1', groupId: 'g1', title: 'A', order: 7, note: 123, due: '2026/10/20' },
+      { id: 't2', groupId: 'g1', title: 'B', order: 9, important: 'yes' },
+    ],
+  }));
+
+  assert.equal(r.ok, true);
+  const [a, b] = r.state.tasks;
+  assert.equal(a.note, '', '非字符串的 note 应变成空串');
+  assert.equal(a.due, null, '非 YYYY-MM-DD 的 due 应变成 null');
+  assert.equal(b.important, true);
+  assert.deepEqual(tasksInGroup(r.state, 'g1').map((t) => t.order), [0, 1], 'order 应压紧');
+});
+
+test('normalizeState 保留合法的 due，丢掉非法的子任务', () => {
+  const r = normalizeState(rawPayload({
+    tasks: [{
+      id: 't1', groupId: 'g1', title: 'A', due: '2026-10-20',
+      subtasks: [
+        { id: 's1', text: '保留', done: true },
+        { id: 's2', text: 5 },
+        'not an object',
+      ],
+    }],
+  }));
+
+  assert.equal(r.state.tasks[0].due, '2026-10-20');
+  assert.deepEqual(r.state.tasks[0].subtasks.map((s) => s.id), ['s1']);
+});
+
+test('normalizeState 给 done 但缺 completedAt 的任务补上 createdAt', () => {
+  const r = normalizeState(rawPayload({
+    tasks: [{ id: 't1', groupId: 'g1', title: 'A', done: true, createdAt: 700 }],
+  }));
+  assert.equal(r.state.tasks[0].completedAt, 700, '不应补成 0（会显示成 1970 年）');
+});
+
+test('normalizeState 给未完成的任务把 completedAt 清成 null', () => {
+  const r = normalizeState(rawPayload({
+    tasks: [{ id: 't1', groupId: 'g1', title: 'A', done: false, completedAt: 999 }],
+  }));
+  assert.equal(r.state.tasks[0].completedAt, null);
+});
+
+test('normalizeState 忽略多余字段，输出只含已知字段', () => {
+  const r = normalizeState(rawPayload({
+    tasks: [{ id: 't1', groupId: 'g1', title: 'A', 恶意字段: 'x', __proto__: 'y' }],
+  }));
+  assert.deepEqual(Object.keys(r.state.tasks[0]).sort(), [
+    'completedAt', 'createdAt', 'done', 'due', 'groupId', 'id',
+    'important', 'note', 'order', 'subtasks', 'title',
+  ]);
+});
+
+test('validateImport 接受合法备份并返回可用 state', () => {
+  const r = validateImport(rawPayload());
+  assert.equal(r.ok, true);
+  assert.equal(r.state.tasks.length, 1);
+  assert.equal(r.state.version, SCHEMA_VERSION);
+});
+
+test('validateImport 用中文理由拒绝来自更新版本的备份', () => {
+  const r = validateImport(rawPayload({ version: 99 }));
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /更新/);
+  assert.match(r.reason, /99/);
+});
+
+test('validateImport 拒绝非对象与缺 version 的内容', () => {
+  assert.equal(validateImport('nope').ok, false);
+  assert.equal(validateImport({ groups: [], tasks: [] }).ok, false);
+});
+
+test('parseStored 对空字符串返回空状态', () => {
+  for (const raw of [null, undefined, '']) {
+    const r = parseStored(raw);
+    assert.equal(r.status, 'empty');
+    assert.equal(r.readonly, false);
+    assert.deepEqual(r.state.tasks, []);
+    assert.equal(r.state.groups.length, 1);
+  }
+});
+
+test('parseStored 对半截 JSON 返回 corrupt 而不是抛异常', () => {
+  const r = parseStored('{"version":1,"groups":[{"id":"g1"');
+  assert.equal(r.status, 'corrupt');
+  assert.equal(r.readonly, false);
+  assert.match(r.warning, /备份/);
+  assert.deepEqual(r.state.tasks, []);
+});
+
+test('parseStored 对结构异常的数据返回 corrupt 并带上理由', () => {
+  const r = parseStored(JSON.stringify({ version: 1, groups: [], tasks: '不是数组' }));
+  assert.equal(r.status, 'corrupt');
+  assert.match(r.warning, /数组/);
+});
+
+test('parseStored 对合法 v1 返回 ok 且压紧 order', () => {
+  const r = parseStored(JSON.stringify(rawPayload({
+    tasks: [{ id: 't1', groupId: 'g1', title: 'A', order: 42 }],
+  })));
+  assert.equal(r.status, 'ok');
+  assert.equal(r.state.tasks[0].order, 0);
+});
+
+test('parseStored 对未来版本返回 readonly，不崩也不覆盖', () => {
+  const r = parseStored(JSON.stringify(rawPayload({ version: 99 })));
+  assert.equal(r.status, 'readonly');
+  assert.equal(r.readonly, true);
+  assert.match(r.warning, /只读/);
 });
